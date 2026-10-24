@@ -9,16 +9,22 @@ Keys are built from the axes (position in mm), the kind and, for text, the strin
 draw and before anything changes, so they stay valid after an adjustment.
 
 Adjustable, per kind (lengths in mm; size, scale and lw are factors; colours are hex):
-    figure      background, colors {old: new} over the whole figure
+    figure      background, colors {old: new} over the whole figure; frame, tickdir for every chart and
+                textbox ("none": no border on boxed texts) for every text, unless the item sets its own
     axes        dx_mm, dy_mm, dw_mm, dh_mm (top-left fixed), background, background_alpha, lw (frame and ticks),
-                colors, visible
+                colors, visible;
+                frame ("full", "open": the two axis sides only, "none"), tickdir ("in", "out", "inout"),
+                grid ("none", "x", "y", "both"), refs [{axis, v, color, ls, lw, label}] reference lines,
+                and Origin's axis dialog, applied before the figure is keyed so the editor sees the new ticks:
+                xlim/ylim [lo, hi], xscale/yscale ("linear", "log"), xstep/ystep (major tick spacing),
+                xminor/yminor (minor ticks on or off)
     text        texts, annotation labels, titles, letters: dx_mm, dy_mm, size, text, weight, style, rotation (deg),
-                ha (left/center/right), colors, alpha, visible
+                ha (left/center/right), colors, alpha, visible, border (false: a boxed text keeps its fill only)
                 (an annotation's leader line keeps its data end and follows the label)
     axislabel   axis titles: as text
     ticks       the tick or category labels of one axis: dx_mm (y) / dy_mm (x), size, weight, rotation,
                 rename {old: new}, colors, visible
-    legend      dx_mm, dy_mm, size, weight, rename, colors, visible
+    legend      dx_mm, dy_mm, size, weight, rename, colors, visible, frame (true/false), loc ("upper right" ...)
     added       "fig/added/<id>": {"add": {...}} plus the usual settings: an item the author inserted in the editor,
                 in mm from the figure's bottom-left corner. add.type is
                   text     x_mm, y_mm (baseline-left), text, size_pt, color
@@ -48,9 +54,11 @@ from matplotlib.lines import Line2D
 from matplotlib.markers import MarkerStyle
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Patch
 from matplotlib.text import Annotation, Text
-from matplotlib.ticker import FixedLocator, Formatter, FuncFormatter
-from matplotlib.transforms import Affine2D, Bbox, ScaledTranslation
+from matplotlib.ticker import (AutoMinorLocator, FixedLocator, Formatter, FuncFormatter, LogLocator, MultipleLocator,
+                               NullFormatter, NullLocator)
+from matplotlib.transforms import Affine2D, Bbox, ScaledTranslation, blended_transform_factory
 
+TWEAK_VERSION = "1.1"                                # onboarding replaces an older copy in a project
 MM = 1 / 25.4
 PT_PER_MM = 72 * MM
 
@@ -451,6 +459,141 @@ def _follow_colorbars(fig, tweaks, axkeys):
             cax.set_position(Bbox.from_bounds(x0 + dx / W, y0 + dy / H, w, h))
 
 
+# ---- frames, axes and reference lines (Origin's layer and axis dialogs) --------------------------------------------
+
+STRUCT = ("xlim", "ylim", "xscale", "yscale", "xstep", "ystep", "xminor", "yminor")
+
+
+def _is_chart(ax):
+    return ax.axison and set(ax.spines.keys()) >= {"left", "right", "top", "bottom"} \
+        and getattr(ax, "_colorbar", None) is None
+
+
+def _label_sides(ax):
+    """(x side, y side) that carry the tick labels: 'bottom'/'top', 'left'/'right'."""
+    def side(axis, one, two):
+        ticks = axis.get_major_ticks()
+        if ticks and ticks[0].label2.get_visible() and not ticks[0].label1.get_visible():
+            return two
+        return one
+    return side(ax.xaxis, "bottom", "top"), side(ax.yaxis, "left", "right")
+
+
+def _frame_of(ax):
+    vis = [ax.spines[s].get_visible() for s in ("left", "right", "top", "bottom")]
+    return "full" if all(vis) else "none" if not any(vis) else "open"
+
+
+def _set_frame(ax, mode):
+    """full: four sides; open: only the sides that carry tick labels (a twin axis keeps its own side);
+    none: no spines (tick marks stay)."""
+    if not _is_chart(ax) or mode not in ("full", "open", "none"):
+        return
+    xs, ys = _label_sides(ax)
+    keep = {xs, ys}
+    for s, sp in ax.spines.items():
+        if mode == "full":
+            sp.set_visible(True)
+        elif mode == "none" or s not in keep:
+            sp.set_visible(False)
+    if mode != "full":
+        off = {s: False for s in ("top", "bottom", "left", "right") if s not in keep}
+        ax.tick_params(which="both", **off)
+
+
+def _tickdir_of(ax):
+    t = ax.xaxis.get_major_ticks()
+    return getattr(t[0], "_tickdir", "out") if t else "out"
+
+
+def _grid_of(ax):
+    on = [any(g.get_visible() for g in a.get_gridlines()) for a in (ax.xaxis, ax.yaxis)]
+    return {(False, False): "none", (True, False): "x", (False, True): "y", (True, True): "both"}[tuple(on)]
+
+
+def _set_grid(ax, mode):
+    style = {}
+    for a in (ax.xaxis, ax.yaxis):                     # keep the script's grid style when there is one
+        g = [x for x in a.get_gridlines() if x.get_visible()]
+        if g:
+            style = dict(color=g[0].get_color(), linewidth=g[0].get_linewidth(), linestyle=g[0].get_linestyle())
+            break
+    style = style or dict(color="#e2e2e2", linewidth=0.4)
+    ax.grid(False, axis="both", which="both")
+    if mode in ("x", "both"):
+        ax.grid(True, axis="x", which="major", **style)
+    if mode in ("y", "both"):
+        ax.grid(True, axis="y", which="major", **style)
+    ax.set_axisbelow(True)
+
+
+def _axis_structure(ax, tw):
+    """Range, scale, major spacing and minor ticks, like Origin's axis dialog."""
+    for n in "xy":
+        axis = getattr(ax, n + "axis")
+        sc = tw.get(n + "scale")
+        if sc in ("linear", "log") and sc != getattr(ax, "get_%sscale" % n)():
+            getattr(ax, "set_%sscale" % n)(sc)
+        lim = tw.get(n + "lim")
+        if isinstance(lim, (list, tuple)) and len(lim) == 2 and lim[0] != lim[1]:
+            getattr(ax, "set_%slim" % n)(float(lim[0]), float(lim[1]))
+        linear = getattr(ax, "get_%sscale" % n)() == "linear"
+        step = tw.get(n + "step")
+        if step and linear:
+            lo, hi = sorted(getattr(ax, "get_%slim" % n)())
+            if (hi - lo) / float(step) <= 200:
+                axis.set_major_locator(MultipleLocator(float(step)))
+        if n + "minor" in tw:
+            if tw[n + "minor"]:
+                axis.set_minor_locator(AutoMinorLocator() if linear else LogLocator(base=10, subs=(2, 3, 4, 5, 6, 7, 8, 9)))
+                axis.set_minor_formatter(NullFormatter())
+            else:
+                axis.set_minor_locator(NullLocator())
+
+
+def _add_refs(ax, refs):
+    """Reference lines at data values (Origin's 'Add reference line'); the view keeps its limits."""
+    xl, yl = ax.get_xlim(), ax.get_ylim()
+    for r in refs or []:
+        try:
+            v = float(r["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        kw = dict(color=r.get("color", "#d9474f"), lw=r.get("lw", 0.6), zorder=1.6,
+                  linestyle=LINESTYLES.get(r.get("ls", "--"), r.get("ls", "--")))
+        if r.get("axis", "y") == "y":
+            ax.axhline(v, **kw)
+            if r.get("label"):
+                ax.text(0.99, v, r["label"], transform=blended_transform_factory(ax.transAxes, ax.transData),
+                        ha="right", va="bottom", fontsize=r.get("size_pt", 5.6), color=kw["color"], zorder=7)
+        else:
+            ax.axvline(v, **kw)
+            if r.get("label"):
+                ax.text(v, 0.99, r["label"], transform=blended_transform_factory(ax.transData, ax.transAxes),
+                        ha="right", va="top", rotation=90, fontsize=r.get("size_pt", 5.6), color=kw["color"], zorder=7)
+    ax.set_xlim(xl)
+    ax.set_ylim(yl)
+
+
+def _border_of(t):
+    p = t.get_bbox_patch() if isinstance(t, Text) else None
+    return bool(p is not None and p.get_visible() and p.get_linewidth() > 0 and to_rgba(p.get_edgecolor())[3] > 0)
+
+
+def _set_border(t, on):
+    p = t.get_bbox_patch() if isinstance(t, Text) else None
+    if p is not None and not on:
+        p.set_edgecolor("none")
+        p.set_linewidth(0)
+
+
+def _set_legend_loc(lg, loc):
+    if hasattr(lg, "set_loc"):
+        lg.set_loc(loc)
+    elif loc in Legend.codes:
+        lg._loc = Legend.codes[loc]
+
+
 # ---- applying one adjustment ---------------------------------------------------------------------------------------
 
 def _shift_text(fig, t, dx, dy):
@@ -555,7 +698,17 @@ def _apply(fig, it, tw):
             a.set_position(Bbox.from_bounds(x0 + dx / W, y0 + (dy - dh) / H, w + dw / W, h + dh / H))
         if tw.get("background") or "background_alpha" in tw:
             a.set_facecolor(to_rgba(tw.get("background") or a.patch.get_facecolor(), tw.get("background_alpha")))
+        if tw.get("frame"):
+            _set_frame(a, tw["frame"])
+        if tw.get("tickdir") in ("in", "out", "inout"):
+            a.tick_params(axis="both", which="both", direction=tw["tickdir"])
+        if tw.get("grid") in ("none", "x", "y", "both"):
+            _set_grid(a, tw["grid"])
+        if tw.get("refs"):
+            _add_refs(a, tw["refs"])
     elif kind in ("text", "axislabel"):
+        if tw.get("border") is False:
+            _set_border(a, False)
         if "text" in tw:
             a.set_text(tw["text"])
         if size != 1.0:
@@ -601,6 +754,10 @@ def _apply(fig, it, tw):
                 t.set_fontsize(t.get_fontsize() * size)
             if tw.get("weight"):
                 t.set_fontweight(tw["weight"])
+        if "frame" in tw:
+            a.set_frame_on(bool(tw["frame"]))
+        if tw.get("loc"):
+            _set_legend_loc(a, tw["loc"])
         if dx or dy:
             _shift_legend(a, dx, dy)
     elif kind == "scatter" and tw.get("scale", 1.0) != 1.0:
@@ -629,6 +786,10 @@ def apply(fig, here, stem, rerun_args=None):
     for k, v in sorted(tweaks.items()):            # texts and shapes inserted in the editor
         if k.startswith("fig/added/") and isinstance(v, dict) and v.get("add"):
             _make_added(fig, k, v)
+    for ax, ak in _axkeys(fig).items():            # axis ranges, scales and ticks first: the keys see the new ticks
+        tw = tweaks.get(ak + "/axes") or {}
+        if any(k in tw for k in STRUCT):
+            _axis_structure(ax, tw)
     fig.canvas.draw()                              # lays out ticks and legends so they can be keyed and tagged
     renderer = fig.canvas.get_renderer()
     H_pt = fig.get_size_inches()[1] * 72
@@ -660,6 +821,17 @@ def apply(fig, here, stem, rerun_args=None):
         if it["kind"] == "axes":
             a.patch.set_gid(gid + "_bg")
             rec.update(panel=it["panel"], background=_hex(a.patch.get_facecolor()) or "none")
+            if _is_chart(a):                       # what Origin's axis dialog shows
+                for s, sp in a.spines.items():     # the editor previews a frame change on these
+                    sp.set_gid("%s_sp_%s" % (gid, s))
+                rec.update(frame=_frame_of(a), tickdir=_tickdir_of(a), grid=_grid_of(a), sides=list(_label_sides(a)),
+                           xlim=[float(v) for v in a.get_xlim()], ylim=[float(v) for v in a.get_ylim()],
+                           xscale=a.get_xscale(), yscale=a.get_yscale(),
+                           xminor=len(a.xaxis.get_minorticklocs()) > 0, yminor=len(a.yaxis.get_minorticklocs()) > 0)
+        if it["kind"] in ("text", "axislabel") and _border_of(a):
+            rec["border"] = True
+        if it["kind"] == "legend":
+            rec.update(frame=bool(a.get_frame_on()))
         if it["kind"] in ("ticks", "legend"):
             rec.update({k: it[k] for k in ("axis", "side") if k in it})
             for j, m in enumerate(it.get("members", [])):
@@ -699,12 +871,35 @@ def apply(fig, here, stem, rerun_args=None):
             used.add(it["key"])
             _apply(fig, it, tw)
     _follow_colorbars(fig, tweaks, axk)
+    fw = tweaks.get("fig/figure") or {}            # figure-wide frame, tick direction and text borders
+    for it in items:
+        own = tweaks.get(it["key"]) or {}
+        if it["kind"] == "axes":
+            if fw.get("frame") and "frame" not in own:
+                _set_frame(it["artist"], fw["frame"])
+            if fw.get("tickdir") in ("in", "out", "inout") and "tickdir" not in own and _is_chart(it["artist"]):
+                it["artist"].tick_params(axis="both", which="both", direction=fw["tickdir"])
+        elif it["kind"] in ("text", "axislabel") and fw.get("textbox") == "none" and "border" not in own:
+            _set_border(it["artist"], False)
+    W_pt, H_pt2 = fig.get_size_inches() * 72
+    for ax, ak in axk.items():                     # where each chart ends up, for the editor's data reader
+        rec = ids.get(_gid(ak + "/axes"))
+        if rec is None or "xlim" not in rec:
+            continue
+        try:
+            ax.apply_aspect()
+        except Exception:
+            pass
+        x0, y0, x1, y1 = ax.get_position().extents
+        rec["box"] = [round(x0 * W_pt, 2), round((1 - y1) * H_pt2, 2), round(x1 * W_pt, 2), round((1 - y0) * H_pt2, 2)]
+        rec.update(xlim=[float(v) for v in ax.get_xlim()], ylim=[float(v) for v in ax.get_ylim()],
+                   xscale=ax.get_xscale(), yscale=ax.get_yscale())
     gm = (tweaks.get("fig/figure") or {}).get("colors")
     if gm:
         _recolor(fig, {k.lower(): v for k, v in gm.items()})
     meta = dict(stem=stem, script=os.path.abspath(sys.argv[0]),
                 args=[str(x) for x in (sys.argv[1:] if rerun_args is None else rerun_args)],
-                python=sys.executable, cwd=os.getcwd(), size_mm=[round(v / MM, 2) for v in fig.get_size_inches()],
+                python=sys.executable, cwd=os.getcwd(), tweak_version=TWEAK_VERSION, size_mm=[round(v / MM, 2) for v in fig.get_size_inches()],
                 palette=[c for c, _ in palette.most_common()], style_palette=_style_palette(),
                 cmaps=_cmap_samples() if any("cmap" in v for v in ids.values()) else {})
     json.dump(dict(meta=meta, ids=ids), open(os.path.join(here, stem + ".tweak_keys.json"), "w", encoding="utf-8"),

@@ -29,6 +29,12 @@
   button:disabled { opacity:.38; cursor:default; }
   button.icon { min-width:32px; padding:4px 8px; }
   #status { margin-left:auto; font-weight:700; }
+  #reader { margin-left:auto; font:12px/1.4 Consolas, monospace; color:var(--blue-d); white-space:nowrap; }
+  .refs { grid-column:1/3; display:flex; flex-direction:column; gap:4px; }
+  .refs div { display:flex; align-items:center; gap:6px; font-size:13px; }
+  .refs input[type=number], .refs input[type=text] { width:82px; }
+  .locs { display:grid; grid-template-columns:repeat(3, 34px); gap:3px; }
+  .locs button { padding:2px 0; }
   #status.warn { color:var(--red); }
   .chip { padding:2px 11px; border:1px solid var(--line); border-radius:4px; cursor:pointer; user-select:none; background:#fff; }
   .chip.on { background:var(--tint); border-color:var(--blue); color:var(--blue-d); font-weight:700; }
@@ -123,7 +129,8 @@
   <button id="save" class="primary" disabled title="Ctrl+S">保存并重新出图</button>
 </header>
 <div class="bar"><span class="lbl">点击可选中</span><span id="chips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
-  <span class="sep"></span><span id="ovlChip" class="chip alarm">重叠检查</span></div>
+  <span class="sep"></span><span id="ovlChip" class="chip alarm">重叠检查</span>
+  <span id="reader" title="鼠标所在处的数据坐标（像 Origin 的数据读取器）"></span></div>
 <aside><div id="layers"></div></aside>
 <main id="main"><div id="board"><div id="stage"></div></div></main>
 <aside class="right" id="props"></aside>
@@ -422,6 +429,22 @@ function previewStyle() {
         if (c.background || it.background !== "none") p.style.fill = c.background || it.background;
         p.style.fillOpacity = num(c, "background_alpha", 1);
       }
+    }
+  }
+  const fs = stored["fig/figure"] || {}, fc = cur["fig/figure"] || {};
+  for (const it of Object.values(items)) {           // frames and text borders: hiding is shown at once
+    const s = stored[it.key] || {}, c = cur[it.key] || {};
+    if (it.kind === "axes" && it.frame) {
+      const want = c.frame || fc.frame || it.frame, sides = it.sides || ["bottom", "left"];
+      for (const sd of ["left", "right", "top", "bottom"]) {
+        const e = svg.getElementById(`${it.own}_sp_${sd}`);
+        if (e) e.style.display = want === "none" || (want === "open" && !sides.includes(sd)) ? "none" : "";
+      }
+    }
+    if (TEXTY.has(it.kind) && it.border) {
+      const off = c.border === false || (c.border === undefined && fc.textbox === "none");
+      const g = it.own && svg.getElementById(it.own);
+      if (g && off) g.querySelectorAll("path").forEach(e => { e.style.stroke = "none"; });
     }
   }
   const fi = items["fig/figure"];
@@ -887,6 +910,85 @@ function cmapProps(it, c) {
   b.appendChild(g);
   b.appendChild(el("div", { class: "note", text: `原始：${it.cmap}，${it.clim.map(v => +v.toPrecision(4)).join(" – ")}。配色在保存出图后显示；色条随之更新，刻度文字保持原样。` }));
 }
+// ---- Origin's layer and axis dialogs: frame, ticks, grid, ranges, reference lines, legend -----------------------
+const sig4 = v => (v === undefined || v === null || v === "") ? "" : String(+(+v).toPrecision(5));
+function valField(box, label, value, set, placeholder) {  // a number kept as typed (ranges can be 1e-6 or 1e4)
+  const i = el("input", { type: "text", inputmode: "decimal", placeholder: placeholder || "" }); i.value = sig4(value);
+  i.onchange = () => { const t = i.value.trim(); push(); set(t === "" ? null : parseFloat(t)); afterEdit(); };
+  if (label !== null) box.append(el("label", { text: label }), i); return i;
+}
+function choose(c, k, v, orig) { return () => { push(); if (v === orig || v === undefined) delete c[k]; else c[k] = v; afterEdit(); }; }
+function axesProps(it, c) {
+  const b = section("框线与刻度（保存出图后完整生效）");
+  const fr = c.frame || (cur["fig/figure"] || {}).frame || it.frame;
+  btnRow(b, "框线", [["有框线", fr === "full", choose(c, "frame", "full", undefined), "四边都有框线"],
+                    ["无框线", fr === "open", choose(c, "frame", "open", undefined), "只留带刻度文字的两条坐标轴"],
+                    ["无轴线", fr === "none", choose(c, "frame", "none", undefined), "坐标轴线也不画，刻度保留"],
+                    ...(c.frame ? [["随全图", 0, () => { push(); delete c.frame; afterEdit(); }, "跟画布里的全图设置"]] : [])]);
+  const td = c.tickdir || (cur["fig/figure"] || {}).tickdir || it.tickdir;
+  btnRow(b, "刻度朝向", [["朝内", td === "in", choose(c, "tickdir", "in", it.tickdir)], ["朝外", td === "out", choose(c, "tickdir", "out", it.tickdir)],
+                       ["内外", td === "inout", choose(c, "tickdir", "inout", it.tickdir)]]);
+  const gr = c.grid || it.grid;
+  btnRow(b, "网格线", [["无", "none"], ["竖线", "x"], ["横线", "y"], ["全部", "both"]].map(([t, v]) => [t, gr === v, choose(c, "grid", v, it.grid)]));
+  for (const n of ["x", "y"]) {
+    const a = section(`${n.toUpperCase()} 轴（坐标轴设置）`);
+    const lim = c[n + "lim"] || it[n + "lim"];
+    const w = el("div", { class: "pair" });
+    valField(w, null, lim[0], v => { if (v === null) return; c[n + "lim"] = [v, (c[n + "lim"] || lim)[1]]; });
+    valField(w, null, lim[1], v => { if (v === null) return; c[n + "lim"] = [(c[n + "lim"] || lim)[0], v]; });
+    a.append(el("label", { text: "起点 / 终点" }), w);
+    const sc = c[n + "scale"] || it[n + "scale"];
+    btnRow(a, "类型", [["线性", sc === "linear", choose(c, n + "scale", "linear", it[n + "scale"])],
+                      ["对数", sc === "log", choose(c, n + "scale", "log", it[n + "scale"])]]);
+    if (sc === "linear") valField(a, "主刻度间隔", c[n + "step"], v => { if (v === null || v <= 0) delete c[n + "step"]; else c[n + "step"] = v; }, "自动");
+    const mi = (n + "minor") in c ? c[n + "minor"] : it[n + "minor"];
+    btnRow(a, "次刻度", [["有", mi, choose(c, n + "minor", true, it[n + "minor"])], ["无", !mi, choose(c, n + "minor", false, it[n + "minor"])]]);
+    if (c[n + "lim"] || c[n + "scale"] || c[n + "step"] || (n + "minor") in c)
+      btnRow(a, "", [["恢复脚本的设置", 0, () => { push(); ["lim", "scale", "step", "minor"].forEach(k => delete c[n + k]); afterEdit(); }]]);
+  }
+  const r = section("参考线（数据坐标）");
+  const refs = c.refs || [], list = el("div", { class: "refs" });
+  refs.forEach((x, i) => list.appendChild(el("div", {}, [
+    el("span", { text: `${x.axis === "x" ? "竖线 x" : "横线 y"} = ${sig4(x.v)}${x.label ? "　" + x.label : ""}` }),
+    el("button", { text: "×", title: "删除", onclick: () => { push(); c.refs = refs.filter((_, j) => j !== i); if (!c.refs.length) delete c.refs; afterEdit(); } })])));
+  const ax = el("select"); ax.innerHTML = '<option value="y">横线 y =</option><option value="x">竖线 x =</option>';
+  const v = el("input", { type: "text", inputmode: "decimal", placeholder: "数值" }), lab = el("input", { type: "text", placeholder: "标注（可空）" });
+  const col = el("input", { type: "color" }); col.value = "#d9474f";
+  list.appendChild(el("div", {}, [ax, v, lab, col, el("button", { text: "添加", onclick: () => {
+    const val = parseFloat(v.value); if (isNaN(val)) { setStatus("参考线要一个数值", true); return; }
+    push(); c.refs = refs.concat([{ axis: ax.value, v: val, label: lab.value.trim(), color: col.value, ls: "--", lw: 0.6 }]); afterEdit(); } })]));
+  r.appendChild(list);
+}
+function legendProps(it, c) {
+  const b = section("图例框与位置（保存出图后生效）");
+  const fr = "frame" in c ? c.frame : it.frame;
+  btnRow(b, "外框", [["有", fr, choose(c, "frame", true, it.frame)], ["无", !fr, choose(c, "frame", false, it.frame)]]);
+  const LOCS = [["upper left", "↖"], ["upper center", "↑"], ["upper right", "↗"], ["center left", "←"], ["center", "·"],
+                ["center right", "→"], ["lower left", "↙"], ["lower center", "↓"], ["lower right", "↘"]];
+  const g = el("div", { class: "locs" });
+  LOCS.forEach(([l, t]) => { const x = el("button", { text: t, title: l, onclick: () => { push(); c.loc = l; delete c.dx_mm; delete c.dy_mm; afterEdit(); } });
+    if (c.loc === l) x.className = "on"; g.appendChild(x); });
+  b.append(el("label", { text: "放在图表的" }), g);
+  if (c.loc) btnRow(b, "", [["恢复原位置", 0, () => { push(); delete c.loc; afterEdit(); }]]);
+}
+function figFrameProps(fi) {
+  const c = curOf(fi.key), b = section("全图框线（对这张图的所有图表）");
+  btnRow(b, "图表框线", [["按脚本", !c.frame, choose(c, "frame", undefined)], ["有框线", c.frame === "full", choose(c, "frame", "full"), "四边都有框线"],
+                       ["无框线", c.frame === "open", choose(c, "frame", "open"), "只留带刻度文字的两条坐标轴"], ["无轴线", c.frame === "none", choose(c, "frame", "none"), "坐标轴线也不画"]]);
+  btnRow(b, "文字外框", [["保留", c.textbox !== "none", choose(c, "textbox", undefined)], ["去掉", c.textbox === "none", choose(c, "textbox", "none"), "图中带框的标注只留白底"]]);
+  btnRow(b, "刻度朝向", [["按脚本", !c.tickdir, choose(c, "tickdir", undefined)], ["朝内", c.tickdir === "in", choose(c, "tickdir", "in")],
+                       ["朝外", c.tickdir === "out", choose(c, "tickdir", "out")], ["内外", c.tickdir === "inout", choose(c, "tickdir", "inout")]]);
+  b.appendChild(el("div", { class: "note", style: "grid-column:1/3", text: "选中单个图表还能另设，优先于这里。" }));
+  btnRow(b, "全稿", [["把这三项用到全稿所有图", 0, async () => {
+    if (dirtyKeys().some(k => k !== fi.key)) { setStatus("先保存这张图的其他改动", true); return; }
+    const st = cur[fi.key] || {};
+    if (!confirm(`把「图表框线：${({ full: "有框线", open: "无框线", none: "无轴线" })[st.frame] || "按脚本"}，文字外框：${st.textbox === "none" ? "去掉" : "保留"}，刻度朝向：${({ in: "朝内", out: "朝外", inout: "内外" })[st.tickdir] || "按脚本"}」用到全稿每一张图并重新出图？`)) return;
+    setStatus("全稿重新出图中…");
+    const res = await fetch("/style_all", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ frame: st.frame || null, textbox: st.textbox || null, tickdir: st.tickdir || null }) }).then(x => x.json());
+    drawLog.text = res.log; await load(); setStatus(/ERROR/.test(res.log) ? "有图出图失败，见日志" : "全稿已更新", /ERROR/.test(res.log));
+  }, "每张图的画布设置都改成这样，并重新出图"]]);
+}
 function shapeProps(it, c) {
   const a = c.add, set = (k, v) => { a[k] = v; };
   const g = section(SHAPES[a.type] + "：位置（mm，从左下角起）");
@@ -956,6 +1058,9 @@ function drawProps() {
       bg.appendChild(palettePicker(nc => { push(); const o = curOf(fi.key);
         if (nc.toLowerCase() === (fi.background || "#ffffff")) delete o.background; else o.background = nc.toLowerCase(); afterEdit(); }));
       colorSection("全图配色", fi.key, meta.palette || [], "点一个颜色，再选新颜色：整张图里用到它的地方一起改。");
+      if (Object.values(items).some(x => x.kind === "axes" && x.frame)) figFrameProps(fi);
+      else if (!meta.tweak_version && !meta.overlay) P.appendChild(el("div", { class: "note", text:
+        "这篇论文的 tweak.py 是旧版，框线、坐标轴范围、参考线等功能用不了：在论文列表点「接入新论文」，选这篇论文的图文件夹再接入一次即可升级（图会逐像素核对）。" }));
     }
     P.appendChild(el("div", { class: "note", text: "选中对象后在这里改属性。Shift+点击多选。" }));
     drawLog(); return;
@@ -1002,6 +1107,10 @@ function drawProps() {
         btnRow(b, "对齐", [["左", ha === "left", () => { push(); c.ha = "left"; afterEdit(); }], ["中", ha === "center", () => { push(); c.ha = "center"; afterEdit(); }],
                            ["右", ha === "right", () => { push(); c.ha = "right"; afterEdit(); }]]);
       }
+      if (TEXTY.has(it.kind) && it.border) {
+        const on = c.border === undefined ? (cur["fig/figure"] || {}).textbox !== "none" : c.border !== false;
+        btnRow(b, "外框", [["有", on, () => { push(); delete c.border; afterEdit(); }], ["无", !on, () => { push(); c.border = false; afterEdit(); }, "只留白底"]]);
+      }
       if (TEXTY.has(it.kind) || it.kind === "ticks") {
         const r0 = num(c, "rotation", it.kind === "ticks" ? 0 : (it.rotation || 0));
         numField(b, "旋转 °", r0, 15, v => c.rotation = v, 0).title = "逆时针为正";
@@ -1029,7 +1138,9 @@ function drawProps() {
       const r = el("input", { type: "range", min: 0, max: 1, step: 0.05 }); r.value = num(c, "background_alpha", 1);
       r.onchange = () => { push(); if (+r.value === 1) delete c.background_alpha; else c.background_alpha = +r.value; afterEdit(false); };
       g.append(el("label", { text: "不透明度" }), r); b.appendChild(g);
+      if (it.frame) axesProps(it, c);
     }
+    if (it.kind === "legend") legendProps(it, c);
     colorSection("颜色", it.key, it.added ? [((c.add || {}).color || "#1b1b1b")] : it.colors, "点一个颜色再选新颜色；只换这一种颜色，其余不变。");
   }
   const b = el("div", { class: "btns", style: "margin-top:14px" });
@@ -1105,7 +1216,7 @@ function normObj(o) {
     if (["size", "scale", "lw"].includes(k) && Math.abs(v - 1) < 1e-3) continue;
     if ((k === "rename" || k === "colors") && !Object.keys(v).length) continue;
     if (k === "visible" && v === true) continue;
-    r[k] = typeof v === "number" ? Math.round(v * 1000) / 1000 : v;
+    r[k] = typeof v === "number" ? (Math.abs(v) < 1e-3 ? +v.toPrecision(6) : Math.round(v * 1000) / 1000) : v;
   }
   return r;
 }
@@ -1293,6 +1404,24 @@ $("figsel").onchange = async () => {
   await fetch("/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fig: $("figsel").value }) });
   await loadFigs(); await load(); updateButtons();
 };
+// ---- data reader: data coordinates under the pointer (Origin's Data Reader) ----------------------------------------
+function readAt(e) {
+  if (!svg) return "";
+  const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
+  const q = p.matrixTransform(svg.getScreenCTM().inverse());
+  for (const it of Object.values(items)) {
+    if (it.kind !== "axes" || !it.box || !it.xlim) continue;
+    const [x0, y0, x1, y1] = it.box;
+    if (q.x < x0 || q.x > x1 || q.y < y0 || q.y > y1) continue;
+    const at = (f, lim, sc) => sc === "log" ? 10 ** (Math.log10(lim[0]) + f * (Math.log10(lim[1]) - Math.log10(lim[0]))) : lim[0] + f * (lim[1] - lim[0]);
+    const x = at((q.x - x0) / (x1 - x0), it.xlim, it.xscale), y = at((y1 - q.y) / (y1 - y0), it.ylim, it.yscale);
+    const f = v => Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-3 && v !== 0) ? v.toExponential(3) : (+v.toPrecision(4)).toString();
+    return `${it.panel ? "图表 " + it.panel + "　" : ""}x = ${f(x)}　y = ${f(y)}`;
+  }
+  return "";
+}
+stage.addEventListener("pointermove", e => { $("reader").textContent = readAt(e); });
+stage.addEventListener("pointerleave", () => { $("reader").textContent = ""; });
 window.addEventListener("resize", drawBoxes);
 window.addEventListener("beforeunload", e => { if (dirtyKeys().length) { e.preventDefault(); e.returnValue = ""; } });
 loadFigs().then(load).then(updateButtons);

@@ -314,10 +314,10 @@ function showPlan(p) {
     ${nothing ? `<p class="bad">没有找到用 Page 出图的脚本。</p><p>编辑器认的是这种写法：<code>pg = Page(宽, 高)</code> … <code>pg.save(HERE, "Fig1")</code>，
       <code>Page</code> 定义在 style.py 一类的模块里。${p.manual.length ? "下面这些脚本直接调用 savefig，需要改成经 Page.save 或 tweak.apply 出图：" : ""}</p>` : `
     <div class="stat"><div><b>${p.modules.length}</b>个出图样式模块（Page）</div><div><b>${p.scripts.length}</b>个出图脚本将重新运行</div>
-      <div><b>${plain.length ? "将加入" : "已有"}</b>编辑器钩子</div></div>
+      <div><b>${plain.length ? "将加入" : p.modules.some(m => m.outdated) ? "将升级" : "已有"}</b>编辑器钩子</div></div>
     <p>会做的事：在 <code>Page.save</code> 里加两行调用 <code>tweak.apply</code>，旁边放一份 <code>tweak.py</code>；逐个重新出图并逐像素比对，确认图没有变；最后生成 <code>figure_labels.json</code>（图号表）。
     ${plain.length ? "不在 git 里的文件会先留一份 .bak 备份。" : ""}</p>`}
-    ${plain.length || hooked.length ? `<h4>出图样式模块</h4><ul>${plain.map(m => `<li>${esc(m.path)}　<span class="warn">将接入</span></li>`).join("")}${hooked.map(m => `<li>${esc(m.path)}　<span class="ok">已接入</span></li>`).join("")}</ul>` : ""}
+    ${plain.length || hooked.length ? `<h4>出图样式模块</h4><ul>${plain.map(m => `<li>${esc(m.path)}　<span class="warn">将接入</span></li>`).join("")}${hooked.map(m => `<li>${esc(m.path)}　${m.outdated ? '<span class="warn">已接入，tweak.py 将升级</span>' : '<span class="ok">已接入</span>'}</li>`).join("")}</ul>` : ""}
     ${other.length ? `<h4 class="warn">需要手动接入的 Page（save 写法不认识）</h4><ul>${other.map(m => `<li>${esc(m.path)}</li>`).join("")}</ul>` : ""}
     ${p.scripts.length ? `<details><summary>将重新运行的脚本（${p.scripts.length}）</summary><ul>${p.scripts.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : ""}
     ${p.manual.length ? `<details ${nothing ? "open" : ""}><summary class="warn">直接用 savefig 的脚本（${p.manual.length}，不会接入）</summary><ul>${p.manual.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : ""}

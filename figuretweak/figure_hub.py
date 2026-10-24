@@ -31,7 +31,7 @@ sys.path.insert(0, HERE)
 import figure_tweak as ft  # noqa: E402
 import onboard  # noqa: E402
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 STATE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "figure_hub")
 # The paper registry: folders to scan and display names. The first that exists wins: the user's own file, a
 # figure-studio skill's projects/figure_papers.json next to this folder, then the default shipped with the program.

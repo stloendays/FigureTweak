@@ -52,6 +52,23 @@ Scripts that call `savefig` directly are listed, not changed. Convert them to a 
   the editor's consistency check (全稿一致性) compares them and can set one size for all outliers.
 - **Commit `<stem>.tweaks.json` and `<stem>.tweak_keys.json`** with the figure; they are part of it.
 
+## Frames and Origin-style axis tools (FigureTweak 1.1, tweak.py `TWEAK_VERSION = "1.1"`)
+
+All stored in `<stem>.tweaks.json`, so the script stays the source and every setting can be switched back:
+
+- **Frame** per chart (`frame`: `full` 有框线, `open` 无框线 = only the two sides carrying tick labels, `none` 无轴线), or
+  for the whole figure on `fig/figure` together with `textbox: "none"` (boxed annotations lose the border, keep the
+  white fill) and `tickdir`. A chart's own setting wins. The canvas panel's 「把这三项用到全稿所有图」 writes the
+  figure-level setting into every figure of the paper and re-renders them.
+- **Axis dialog** per chart: `xlim`/`ylim`, `xscale`/`yscale`, `xstep`/`ystep`, `xminor`/`yminor`, `grid`,
+  `tickdir`; applied before the figure is keyed, so the new tick labels are editable too.
+- **Reference lines**: `refs` `[{axis, v, label, color, ls, lw}]` in data coordinates; the view keeps its limits.
+- **Legend**: `frame`, `loc`. **Text**: `border: false`.
+- The editor's data reader shows data coordinates under the pointer (log axes included).
+
+A paper whose `tweak.py` predates 1.1 shows none of this; re-run 接入新论文 on its figures folder: onboarding upgrades
+`tweak.py` and re-renders with the pixel comparison.
+
 ## figure_labels.json
 
 At the figures root, maps figures to the manuscript's numbers; its order is the order the editor lists them in.

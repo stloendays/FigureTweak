@@ -149,6 +149,13 @@ def label_key(stem):
     return (group, int(m.group(4)), stem)
 
 
+def _outdated(module):
+    """True when the tweak.py next to a Page module is older than the one onboarding would put there."""
+    dst = os.path.join(os.path.dirname(module), "tweak.py")
+    have = tweak_version(dst) if os.path.exists(dst) else None
+    return have is not None and have < tweak_version(os.path.join(HERE, "tweak.py"))
+
+
 def analyze(folder, python=None):
     folder = os.path.abspath(folder)
     mods = page_modules(folder)
@@ -160,10 +167,20 @@ def analyze(folder, python=None):
             fonts.append(p)
     pys = interpreters(folder, [python] if python else None)
     return dict(folder=folder.replace("\\", "/"),
-                modules=[dict(path=p.replace("\\", "/"), state=s) for p, s in mods],
+                modules=[dict(path=p.replace("\\", "/"), state=s, outdated=_outdated(p)) for p, s in mods],
                 scripts=[p.replace("\\", "/") for p in paged], manual=[p.replace("\\", "/") for p in plain],
                 text_as_paths=[p.replace("\\", "/") for p in fonts], pythons=pys, python=python or (pys[0] if pys else ""),
                 labels=os.path.exists(os.path.join(folder, "figure_labels.json")))
+
+
+def tweak_version(path):
+    """(major, minor) of a tweak.py: TWEAK_VERSION, or (1, 0) for a copy from before it was numbered; None when the
+    file is not a tweak.py the editor can use."""
+    s = read(path)
+    if "def apply(fig, here, stem" not in s:
+        return None if "rerun_args" not in s else (0, 9)
+    m = re.search(r"""^TWEAK_VERSION\s*=\s*["'](\d+)\.(\d+)""", s, re.M)
+    return (int(m.group(1)), int(m.group(2))) if m else (1, 0)
 
 
 def in_git(path):
@@ -273,9 +290,12 @@ def run(folder, python, job):
                 else "跳过（save 方法的写法不认识，需要手动接入）"
             dst = os.path.join(os.path.dirname(p), "tweak.py")
             src = os.path.join(HERE, "tweak.py")
-            if "跳过" not in msg and (not os.path.exists(dst) or read(dst).find("def apply(fig, here, stem, rerun_args") < 0):
+            have = tweak_version(dst) if os.path.exists(dst) else None
+            if "跳过" not in msg and (have is None or have < tweak_version(src)):
+                if have is not None and not in_git(dst):
+                    shutil.copy2(dst, dst + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
                 shutil.copy2(src, dst)
-                msg += "，已放入 tweak.py"
+                msg += "，已放入 tweak.py" if have is None else "，tweak.py 已升级到 %s" % ".".join(map(str, tweak_version(src)))
             mods.append(dict(path=p, msg=msg))
             log("%s: %s" % (p, msg))
         job["step"] = "重新出图"

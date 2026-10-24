@@ -23,6 +23,7 @@ import sys
 import threading
 import webbrowser
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -96,7 +97,7 @@ class Fig:
             out = {}
             for kk, vv in (v or {}).items():
                 if isinstance(vv, float):
-                    vv = round(vv, 3)
+                    vv = float("%.6g" % vv) if abs(vv) < 1e-3 else round(vv, 3)   # axis values can be tiny
                 if (kk in ("dx_mm", "dy_mm", "dw_mm", "dh_mm") and abs(vv) < 1e-3) \
                         or (kk in ("size", "scale", "lw") and abs(vv - 1) < 1e-3) \
                         or (kk in ("rename", "colors") and not vv) or (kk == "visible" and vv is True):
@@ -342,6 +343,22 @@ def make_handler(st):
                         figs[stem].write_tweaks(t)
                         logs.append("%s: %s" % (stem, figs[stem].render().splitlines()[0]))
                     return self.send(json.dumps({"log": "OK\n" + "\n".join(logs)}, ensure_ascii=False))
+                if self.path == "/style_all":         # one frame / text-border / tick setting for every figure
+                    figs = [Fig(s, p) for s, _, p in discover(root_of(st, st["fig"]))]
+                    figs = [fg for fg in figs if not fg.meta().get("overlay")]
+                    for fg in figs:
+                        t = fg.tweaks()
+                        e = t.setdefault("fig/figure", {})
+                        for k in ("frame", "textbox", "tickdir"):
+                            if req.get(k):
+                                e[k] = req[k]
+                            else:
+                                e.pop(k, None)
+                        fg.write_tweaks(t)
+                    with ThreadPoolExecutor(max_workers=3) as ex:
+                        logs = list(ex.map(lambda fg: "%s: %s" % (fg.id, fg.render().splitlines()[0]), figs))
+                    return self.send(json.dumps({"log": ("ERROR\n" if any("ERROR" in x for x in logs) else "OK\n")
+                                                 + "\n".join(logs)}, ensure_ascii=False))
                 f = st["fig"]
                 t = f.tweaks()
                 frag = req.pop("__overlay_svg", None)
