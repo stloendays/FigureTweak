@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>论文调图</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23304c86'/%3E%3Cpath d='M8 23V10m0 13h16' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3Cpath d='M11 19l4-5 3 3 5-7' stroke='%23f2b33d' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  /* same palette as the editor (figure_tweak.html): ink text, Ru blue, one red for alarms */
+  :root { --ink:#1b1b1b; --ink2:#38404f; --line:#c3c8d1; --rule:#e2e6ec; --blue:#5677b5; --blue-d:#304c86;
+          --tint:#e8edf7; --tint2:#f4f6fa; --amber:#a85e24; --amber-t:#fbf0e4; --red:#d9474f; --gold:#f2b33d; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; font:14px/1.5 "Microsoft YaHei", "PingFang SC", Arial, sans-serif; color:var(--ink); background:var(--tint2);
+         display:grid; grid-template-rows:auto 1fr; grid-template-columns:320px 1fr; }
+  button, input, select { font:inherit; color:inherit; }
+  button { padding:6px 14px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; white-space:nowrap; }
+  button:hover:not(:disabled) { border-color:var(--blue); background:var(--tint); }
+  button.primary { background:var(--blue-d); color:#fff; border-color:var(--blue-d); font-weight:700; }
+  button.primary:hover:not(:disabled) { background:#253d6e; }
+  button.ghost { border-color:transparent; background:transparent; }
+  button.ghost:hover { border-color:var(--line); background:#fff; }
+  button:disabled { opacity:.4; cursor:default; }
+  button svg { vertical-align:-3px; margin-right:5px; }
+
+  header { grid-column:1 / 3; display:flex; align-items:center; gap:14px; padding:10px 18px; background:#fff;
+           border-bottom:1px solid var(--line); }
+  .logo { display:flex; align-items:center; gap:10px; margin-right:8px; }
+  .logo b { font-size:18px; letter-spacing:.05em; }
+  .logo small { display:block; font-size:12px; color:var(--ink2); line-height:1.2; }
+  .search { position:relative; flex:0 1 420px; }
+  .search input { width:100%; padding:7px 12px 7px 34px; border:1px solid var(--line); border-radius:18px; background:var(--tint2); }
+  .search input:focus { outline:none; border-color:var(--blue); background:#fff; box-shadow:0 0 0 3px var(--tint); }
+  .search svg { position:absolute; left:11px; top:9px; }
+  .search kbd { position:absolute; right:10px; top:7px; font:12px Consolas, monospace; border:1px solid var(--line);
+                border-radius:4px; padding:0 5px; background:#fff; color:var(--ink2); }
+  .grow { flex:1; }
+  #scan { font-size:13px; color:var(--ink2); display:flex; align-items:center; gap:6px; }
+  .spin { width:14px; height:14px; border:2px solid var(--tint); border-top-color:var(--blue-d); border-radius:50%;
+          animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  nav { overflow:auto; background:#fff; border-right:1px solid var(--line); padding:12px 10px 20px; }
+  nav h2 { font-size:12px; letter-spacing:.08em; margin:4px 8px 8px; color:var(--ink2); }
+  .paper { display:flex; gap:12px; padding:10px; border-radius:8px; cursor:pointer; border:1px solid transparent; margin-bottom:4px; }
+  .paper:hover { background:var(--tint2); }
+  .paper.on { background:var(--tint); border-color:#b9c7e3; }
+  .av { flex:none; width:40px; height:40px; border-radius:9px; display:grid; place-items:center; font-weight:700; font-size:17px;
+        color:#fff; background:var(--blue-d); }
+  .paper .t { font-weight:700; line-height:1.3; }
+  .paper .s { font-size:12px; color:var(--ink2); line-height:1.35; margin-top:2px; }
+  .paper .m { font-size:12px; color:var(--blue-d); margin-top:3px; }
+  .navfoot { margin:18px 8px 0; padding-top:12px; border-top:1px solid var(--rule); font-size:12px; color:var(--ink2); }
+  .navfoot div { word-break:break-all; }
+
+  main { overflow:auto; padding:22px 28px 40px; }
+  .resume { display:flex; align-items:center; gap:16px; padding:12px 16px; margin-bottom:20px; border-radius:10px;
+            background:linear-gradient(90deg, #304c86, #4a68a6); color:#fff; }
+  .resume .x { flex:1; min-width:0; }
+  .resume .x div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .resume small { opacity:.9; }
+  .resume button { background:#fff; color:var(--blue-d); border-color:#fff; font-weight:700; }
+  .resume button:hover { background:var(--tint); }
+  .head { display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+  .head .x { flex:1; min-width:260px; }
+  h1 { font-size:22px; margin:0; line-height:1.3; }
+  .sub { color:var(--ink2); margin-top:2px; }
+  .path { font:12px Consolas, monospace; color:var(--ink2); margin-top:6px; word-break:break-all; }
+  .acts { display:flex; gap:8px; }
+  .vers { display:flex; gap:8px; flex-wrap:wrap; margin:16px 0 4px; }
+  .ver { padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; text-align:left; line-height:1.3; }
+  .ver b { display:block; font-size:13px; }
+  .ver span { font-size:12px; color:var(--ink2); }
+  .ver.on { border-color:var(--blue-d); background:var(--tint); box-shadow:inset 0 0 0 1px var(--blue-d); }
+  .tag { display:inline-block; font-size:11px; padding:0 6px; border-radius:8px; background:var(--tint); color:var(--blue-d);
+         margin-left:6px; font-weight:700; vertical-align:1px; }
+  .ver.on .tag { background:#fff; }
+  select.more { padding:6px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; max-width:360px; }
+  h3 { font-size:15px; margin:26px 0 10px; display:flex; align-items:center; gap:8px; }
+  h3 .n { font-size:12px; font-weight:400; color:var(--ink2); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; cursor:pointer;
+          transition:transform .12s, box-shadow .12s, border-color .12s; display:flex; flex-direction:column; }
+  .card:hover { transform:translateY(-2px); border-color:var(--blue); box-shadow:0 8px 22px rgba(48,76,134,.16); }
+  .card .img { aspect-ratio:4 / 3; background:#fff; display:grid; place-items:center; border-bottom:1px solid var(--rule); padding:8px; position:relative; }
+  .card img { max-width:100%; max-height:100%; object-fit:contain; display:block; }
+  .card .open { position:absolute; inset:auto 10px 10px auto; opacity:0; transition:opacity .12s; padding:4px 12px; font-size:13px; }
+  .card:hover .open { opacity:1; }
+  .card .cap { padding:9px 12px 11px; }
+  .card .cap b { display:block; }
+  .card .cap div { font-size:12px; color:var(--ink2); display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:2px; }
+  .card code { font:12px Consolas, monospace; color:var(--ink2); }
+  .badge { font-size:11px; padding:0 7px; border-radius:8px; background:var(--amber-t); color:var(--amber); font-weight:700; }
+  .noimg { color:var(--ink2); font-size:13px; }
+  .empty { max-width:560px; margin:60px auto; text-align:center; color:var(--ink2); }
+  .empty b { display:block; color:var(--ink); font-size:17px; margin-bottom:6px; }
+  mark { background:#fde7a7; color:inherit; border-radius:2px; }
+  #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--ink); color:#fff;
+           padding:9px 18px; border-radius:8px; opacity:0; transition:all .2s; pointer-events:none; max-width:80vw; z-index:9; }
+  #toast.on { opacity:1; transform:translateX(-50%); }
+  #toast.err { background:var(--red); }
+  #veil { position:fixed; inset:0; background:rgba(255,255,255,.88); display:none; place-items:center; z-index:8; font-size:16px; }
+  #veil.on { display:grid; }
+  /* onboarding and rename dialogs */
+  #modal { position:fixed; inset:0; background:rgba(27,27,27,.38); display:none; place-items:center; z-index:7; padding:16px; }
+  #modal.on { display:grid; }
+  .dlg { background:#fff; border-radius:12px; width:min(760px, 100%); max-height:88vh; overflow:auto; padding:22px 26px;
+         box-shadow:0 20px 60px rgba(0,0,0,.25); }
+  .dlg h2 { margin:0 0 4px; font-size:19px; }
+  .dlg .lead { color:var(--ink2); margin-bottom:14px; word-break:break-all; }
+  .dlg h4 { margin:16px 0 6px; font-size:14px; }
+  .dlg ul { margin:4px 0; padding-left:20px; }
+  .dlg li { font:12.5px/1.6 Consolas, "Microsoft YaHei", monospace; word-break:break-all; }
+  .dlg .row { display:flex; gap:8px; align-items:center; }
+  .dlg select, .dlg input[type=text] { flex:1; padding:6px 10px; border:1px solid var(--line); border-radius:6px; min-width:0; }
+  .dlg .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+  .ok { color:#2f6b2a; font-weight:700; } .warn { color:var(--amber); font-weight:700; } .bad { color:var(--red); font-weight:700; }
+  .stat { display:flex; gap:12px; flex-wrap:wrap; margin:10px 0; }
+  .stat div { flex:1; min-width:120px; border:1px solid var(--rule); border-radius:8px; padding:8px 12px; }
+  .stat b { display:block; font-size:22px; }
+  .bar { height:8px; background:var(--tint); border-radius:4px; overflow:hidden; margin:10px 0; }
+  .bar i { display:block; height:100%; background:var(--blue-d); transition:width .3s; }
+  .dlg pre { background:var(--tint2); border:1px solid var(--rule); border-radius:6px; padding:8px 10px; max-height:240px; overflow:auto;
+             font-size:12px; white-space:pre-wrap; word-break:break-all; margin:6px 0 0; }
+  details summary { cursor:pointer; font-weight:700; margin-top:10px; }
+  h1 .edit { border:none; background:none; padding:2px 6px; vertical-align:2px; color:var(--blue-d); }
+  .ver-foot { margin-top:14px; font-size:12px; color:var(--ink2); }
+  @media (max-width: 860px) { body { grid-template-columns:1fr; grid-template-rows:auto auto 1fr; } nav { max-height:34vh; border-right:none; border-bottom:1px solid var(--line); } .logo small { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <svg width="34" height="34" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#304c86"/>
+      <path d="M8 23V10m0 13h16" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <path d="M11 19l4-5 3 3 5-7" stroke="#f2b33d" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div><b>论文调图</b><small>选一篇论文、一张图，进入图层编辑器</small></div>
+  </div>
+  <label class="search">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#38404f" stroke-width="1.7"><circle cx="7" cy="7" r="5"/><path d="m11 11 3.5 3.5"/></svg>
+    <input id="q" placeholder="搜索论文、图号或文件名" autocomplete="off"><kbd>/</kbd>
+  </label>
+  <div class="grow"></div>
+  <div id="scan"></div>
+  <button id="rescan" class="ghost" title="重新扫描所有文件夹"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>刷新</button>
+  <button id="onb" class="primary" title="让一篇论文的图可以在这里编辑"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 2.5v11M2.5 8h11"/></svg>接入新论文</button>
+  <button id="addf" class="ghost" title="把另一个文件夹加入扫描"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.5 4.5v8h13v-7H8L6.5 3.5h-5zM8 7v4M6 9h4"/></svg>添加文件夹</button>
+  <button id="quit" class="ghost" title="关闭编辑器服务"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 1.5v6M4.3 3.8a5.5 5.5 0 1 0 7.4 0"/></svg>退出</button>
+</header>
+<nav><h2>论文</h2><div id="papers"></div><div class="navfoot" id="roots"></div></nav>
+<main id="main"></main>
+<div id="toast"></div>
+<div id="veil"><div id="veilText"></div></div>
+<div id="modal"><div class="dlg" id="dlg"></div></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+let data = { papers: [] }, selPaper = store.get("hub.paper"), selVer = {}, polling = null;
+try { selVer = JSON.parse(store.get("hub.ver") || "{}"); } catch (e) {}
+const PALETTE = ["#304c86", "#467238", "#a85e24", "#6b4c9a", "#2f7a7a", "#8a3d55"];
+
+function ago(t) {
+  if (!t) return "";
+  const s = Date.now() / 1000 - t;
+  if (s < 60) return "刚刚";
+  if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+  if (s < 86400 * 30) return Math.floor(s / 86400) + " 天前";
+  const d = new Date(t * 1000); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function toast(msg, err) {
+  const t = $("toast"); t.textContent = msg; t.className = "on" + (err ? " err" : "");
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.className = "", err ? 5000 : 2600);
+}
+function hl(s, q) {
+  s = esc(s); if (!q) return s;
+  const i = s.toLowerCase().indexOf(esc(q).toLowerCase());
+  return i < 0 ? s : s.slice(0, i) + "<mark>" + s.slice(i, i + esc(q).length) + "</mark>" + s.slice(i + esc(q).length);
+}
+function group(label) {
+  const l = label.toLowerCase();
+  if (l.includes("extended data") || /^ed\s?\d/.test(l)) return "扩展数据图 Extended Data";
+  if (l.includes("supplementary") || /^(fig\.?\s*)?s\d/.test(l) || l.startsWith("figs")) return "补充图 Supplementary";
+  if (/\bfig/.test(l)) return "正文图 Main";
+  return "其他图";
+}
+const version = p => p.versions.find(v => v.id === selVer[p.id]) || p.versions[0];
+const query = () => $("q").value.trim().toLowerCase();
+function matches(p, q) {
+  if (!q) return true;
+  return (p.name + " " + p.subtitle + " " + p.main).toLowerCase().includes(q)
+      || p.versions.some(v => (v.name + " " + v.branch).toLowerCase().includes(q) || v.figs.some(f => (f.label + " " + f.stem).toLowerCase().includes(q)));
+}
+
+async function refresh(rescan) {
+  data = await fetch("/hub/papers" + (rescan ? "?rescan=1" : "")).then(r => r.json());
+  render();
+  clearTimeout(polling);
+  if (data.scanning) polling = setTimeout(() => refresh(false), 1500);
+}
+
+function render() {
+  const q = query();
+  $("scan").innerHTML = data.scanning ? '<span class="spin"></span>正在扫描文件夹…'
+    : data.scan_time ? "上次扫描 " + esc(ago(data.scan_time)) : "";
+  $("rescan").disabled = !!data.scanning;
+  $("roots").innerHTML = "<b>扫描范围</b>" + (data.roots || []).map(r => `<div>${esc(r)}</div>`).join("")
+    + `<div class="ver-foot">FigureTweak 论文调图 v${esc(data.version || "")}</div>`;
+  const list = data.papers.filter(p => matches(p, q));
+  if (!data.papers.find(p => p.id === selPaper)) selPaper = data.papers[0] && data.papers[0].id;
+  if (q && list.length && !list.find(p => p.id === selPaper)) selPaper = list[0].id;
+  $("papers").innerHTML = list.map((p, i) => {
+    const nf = version(p).figs.length, c = PALETTE[data.papers.indexOf(p) % PALETTE.length];
+    return `<div class="paper${p.id === selPaper ? " on" : ""}" data-id="${p.id}">
+      <div class="av" style="background:${c}">${esc([...p.name][0] || "?")}</div>
+      <div><div class="t">${hl(p.name, q)}</div>${p.subtitle ? `<div class="s">${hl(p.subtitle, q)}</div>` : ""}
+      <div class="m">${nf} 张图 · ${p.versions.length} 个版本 · ${esc(ago(p.mtime))}</div></div></div>`;
+  }).join("") || (data.scanning ? "" : '<div class="s" style="padding:8px">没有匹配的论文</div>');
+  document.querySelectorAll(".paper").forEach(el => el.onclick = () => { selPaper = el.dataset.id; store.set("hub.paper", selPaper); render(); });
+  renderMain(data.papers.find(p => p.id === selPaper), q);
+}
+
+function renderMain(p, q) {
+  const m = $("main");
+  let html = "";
+  const last = data.last, lastV = last && data.papers.flatMap(x => x.versions).find(v => v.id === last.version);
+  const lastF = lastV && lastV.figs.find(f => (f.fid || f.stem) === last.fig);
+  if (lastF && !q) html += `<div class="resume"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 1.5"/></svg>
+      <div class="x"><div><b>继续上次：</b>${esc(last.paper)} · ${esc(lastF.label)}</div>
+      <small>${esc(lastV.name)}${last.branch ? "（" + esc(last.branch) + "）" : ""} · ${esc(ago(last.time))}打开</small></div>
+      <button id="resume">继续编辑 →</button></div>`;
+  if (!p) {
+    m.innerHTML = html + (data.scanning ? '<div class="empty"><b>正在查找可编辑的图…</b>首次扫描约需十几秒。</div>'
+      : `<div class="empty"><b>还没有找到可编辑的图</b>可编辑的图是用 figure-studio 的 <code>Page.save</code> / <code>tweak.apply</code> 出过一次的图，
+         旁边会有 <code>*.tweak_keys.json</code>。还没接入的论文点「接入新论文」，选它的图所在文件夹，一步完成；
+         已接入但不在扫描范围内的，用「添加文件夹」。<div style="margin-top:14px"><button class="primary" onclick="onboardStart()">接入新论文</button></div></div>`);
+    bindResume(lastV, lastF); return;
+  }
+  const v = version(p);
+  const vbtn = x => `<button class="ver${x.id === v.id ? " on" : ""}" data-v="${x.id}"><b>${esc(x.name)}${x.main ? '<span class="tag">主仓库</span>' : ""}</b>
+      <span>${esc(x.branch || "无分支信息")} · ${x.figs.length} 张 · ${esc(ago(x.mtime))}</span></button>`;
+  const shown = p.versions.slice(0, 4), rest = p.versions.slice(4);
+  if (rest.includes(v)) { shown.pop(); shown.push(v); }
+  const others = p.versions.filter(x => !shown.includes(x));
+  html += `<div class="head"><div class="x"><h1>${esc(p.name)}<button class="edit" id="rename" title="改名称">✎</button></h1>${p.subtitle ? `<div class="sub">${esc(p.subtitle)}</div>` : ""}
+      <div class="path">${esc(v.roots.join("   ·   "))}</div></div>
+      <div class="acts"><button id="reveal"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.5 4.5v8h13v-7H8L6.5 3.5h-5z"/></svg>打开文件夹</button>
+      <button class="primary" id="openFirst">打开编辑器 →</button></div></div>`;
+  if (p.versions.length > 1) html += `<div class="vers">${shown.map(vbtn).join("")}${others.length ? `<select class="more" id="moreVer">
+      <option value="">其他 ${others.length} 个版本…</option>${others.map(x => `<option value="${x.id}">${esc(x.name)} · ${esc(x.branch)} · ${esc(ago(x.mtime))}</option>`).join("")}</select>` : ""}</div>`;
+  const groups = {};
+  v.figs.filter(f => !q || (f.label + " " + f.stem).toLowerCase().includes(q) || (p.name + " " + p.subtitle).toLowerCase().includes(q))
+    .forEach(f => (groups[group(f.label)] = groups[group(f.label)] || []).push(f));
+  const order = ["正文图 Main", "扩展数据图 Extended Data", "补充图 Supplementary", "其他图"];
+  html += order.filter(g => groups[g]).map(g => `<h3>${g}<span class="n">${groups[g].length} 张</span></h3><div class="grid">${groups[g].map(f => `
+      <div class="card" data-f="${f.id}" title="${esc(f.keys)}">
+        <div class="img"><img loading="lazy" src="/hub/thumb?id=${f.id}&t=${Math.round(f.mtime)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'noimg',textContent:'没有预览图'}))">
+          <button class="primary open">编辑</button></div>
+        <div class="cap"><b>${hl(f.label, q)}</b><div>${f.label !== (f.fid || f.stem) ? `<code>${hl(f.fid || f.stem, q)}</code>` : ""}
+          ${f.edits ? `<span class="badge">已调 ${f.edits} 处</span>` : ""}<span>${esc(ago(f.mtime))}</span></div></div>
+      </div>`).join("")}</div>`).join("") || '<div class="empty">这个版本里没有匹配的图</div>';
+  m.innerHTML = html;
+  bindResume(lastV, lastF);
+  m.querySelectorAll(".ver").forEach(b => b.onclick = () => pickVer(p, b.dataset.v));
+  if ($("moreVer")) $("moreVer").onchange = e => e.target.value && pickVer(p, e.target.value);
+  m.querySelectorAll(".card").forEach(c => c.onclick = () => openFig(v.id, c.dataset.f));
+  $("openFirst").onclick = () => openFig(v.id, v.figs[0].id);
+  $("reveal").onclick = () => fetch("/hub/reveal", { method: "POST", body: JSON.stringify({ version: v.id }) });
+  $("rename").onclick = () => renamePaper(p);
+}
+function bindResume(v, f) { if ($("resume")) $("resume").onclick = () => openFig(v.id, f.id); }
+function pickVer(p, id) { selVer[p.id] = id; store.set("hub.ver", JSON.stringify(selVer)); render(); }
+
+async function openFig(version, fig) {
+  $("veilText").textContent = "正在打开…"; $("veil").className = "on";
+  const r = await fetch("/hub/open", { method: "POST", body: JSON.stringify({ version, fig }) }).then(r => r.json()).catch(() => ({ error: "编辑器服务没有响应" }));
+  if (r.ok) { location.href = "/edit"; return; }
+  $("veil").className = ""; toast(r.error || "打开失败", true); refresh(true);
+}
+
+// ---- dialogs ------------------------------------------------------------------------------------------------------
+const modal = (html) => { $("dlg").innerHTML = html; $("modal").className = "on"; };
+const closeModal = () => { $("modal").className = ""; };
+$("modal").onclick = e => { if (e.target === $("modal") && !onb.running) closeModal(); };
+document.addEventListener("keydown", e => { if (e.key === "Escape" && $("modal").className && !onb.running) closeModal(); });
+
+function renamePaper(p) {
+  modal(`<h2>论文名称</h2><div class="lead">只改这里显示的名字，不动任何文件。</div>
+    <h4>名称</h4><div class="row"><input type="text" id="rnName" value="${esc(p.name)}"></div>
+    <h4>副标题</h4><div class="row"><input type="text" id="rnSub" value="${esc(p.subtitle)}" placeholder="例如：期刊、课题、仓库名"></div>
+    <div class="foot"><button onclick="closeModal()">取消</button><button class="primary" id="rnGo">保存</button></div>`);
+  $("rnName").focus(); $("rnName").select();
+  $("rnGo").onclick = async () => {
+    await fetch("/hub/rename", { method: "POST", body: JSON.stringify({ main: p.main, name: $("rnName").value, subtitle: $("rnSub").value }) });
+    closeModal(); refresh(false);
+  };
+}
+
+const onb = { running: false, plan: null };
+async function onboardStart(path) {
+  if (!path) toast("请在弹出的窗口里选择论文的图所在文件夹");
+  modal(`<h2>接入新论文</h2><div class="lead"><span class="spin" style="display:inline-block;vertical-align:-2px"></span> 正在分析文件夹…</div>`);
+  const plan = await fetch("/hub/onboard/analyze", { method: "POST", body: JSON.stringify({ path: path || "" }) }).then(r => r.json());
+  if (!plan.ok) { if (plan.error) toast(plan.error, true); closeModal(); return; }
+  onb.plan = plan; showPlan(plan);
+}
+function showPlan(p) {
+  const hooked = p.modules.filter(m => m.state === "hooked"), plain = p.modules.filter(m => m.state === "plain"),
+        other = p.modules.filter(m => m.state === "other");
+  const nothing = !p.scripts.length;
+  modal(`<h2>接入新论文</h2><div class="lead">${esc(p.folder)}</div>
+    ${nothing ? `<p class="bad">没有找到用 Page 出图的脚本。</p><p>编辑器认的是这种写法：<code>pg = Page(宽, 高)</code> … <code>pg.save(HERE, "Fig1")</code>，
+      <code>Page</code> 定义在 style.py 一类的模块里。${p.manual.length ? "下面这些脚本直接调用 savefig，需要改成经 Page.save 或 tweak.apply 出图：" : ""}</p>` : `
+    <div class="stat"><div><b>${p.modules.length}</b>个出图样式模块（Page）</div><div><b>${p.scripts.length}</b>个出图脚本将重新运行</div>
+      <div><b>${plain.length ? "将加入" : "已有"}</b>编辑器钩子</div></div>
+    <p>会做的事：在 <code>Page.save</code> 里加两行调用 <code>tweak.apply</code>，旁边放一份 <code>tweak.py</code>；逐个重新出图并逐像素比对，确认图没有变；最后生成 <code>figure_labels.json</code>（图号表）。
+    ${plain.length ? "不在 git 里的文件会先留一份 .bak 备份。" : ""}</p>`}
+    ${plain.length || hooked.length ? `<h4>出图样式模块</h4><ul>${plain.map(m => `<li>${esc(m.path)}　<span class="warn">将接入</span></li>`).join("")}${hooked.map(m => `<li>${esc(m.path)}　<span class="ok">已接入</span></li>`).join("")}</ul>` : ""}
+    ${other.length ? `<h4 class="warn">需要手动接入的 Page（save 写法不认识）</h4><ul>${other.map(m => `<li>${esc(m.path)}</li>`).join("")}</ul>` : ""}
+    ${p.scripts.length ? `<details><summary>将重新运行的脚本（${p.scripts.length}）</summary><ul>${p.scripts.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : ""}
+    ${p.manual.length ? `<details ${nothing ? "open" : ""}><summary class="warn">直接用 savefig 的脚本（${p.manual.length}，不会接入）</summary><ul>${p.manual.map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>` : ""}
+    ${p.text_as_paths.length ? `<p class="warn">注意：${p.text_as_paths.map(esc).join("、")} 没有设置 svg.fonttype = "none"，文字会被画成路径，编辑器里改不了文字内容。</p>` : ""}
+    ${nothing ? "" : `<h4>用哪个 Python 出图（需要装有 matplotlib）</h4><div class="row"><select id="onbPy">${(p.pythons.length ? p.pythons : [""]).map(x => `<option ${x === p.python ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
+      <button id="onbPick">浏览…</button></div>`}
+    <div class="foot"><button onclick="closeModal()">${nothing ? "关闭" : "取消"}</button>${nothing ? "" : `<button class="primary" id="onbGo">开始接入</button>`}</div>`);
+  if (nothing) return;
+  $("onbPick").onclick = async () => {
+    const r = await fetch("/hub/pick_python", { method: "POST", body: "{}" }).then(r => r.json());
+    if (r.path) { const o = document.createElement("option"); o.textContent = r.path; o.selected = true; $("onbPy").prepend(o); }
+  };
+  $("onbGo").onclick = async () => {
+    const python = $("onbPy").value;
+    if (!python) { toast("先选一个 python.exe", true); return; }
+    const r = await fetch("/hub/onboard/start", { method: "POST", body: JSON.stringify({ path: p.folder, python }) }).then(r => r.json());
+    if (!r.ok) { toast(r.error || "启动失败", true); return; }
+    onb.running = true; pollJob();
+  };
+}
+async function pollJob() {
+  const j = await fetch("/hub/onboard/job").then(r => r.json());
+  if (!j.finished) {
+    const pct = j.total ? Math.round(100 * j.done / j.total) : 3;
+    modal(`<h2>正在接入…</h2><div class="lead">${esc(j.folder)}</div>
+      <div><b>${esc(j.step)}</b>　${j.total ? `${j.done} / ${j.total} 个脚本` : ""}</div><div class="bar"><i style="width:${pct}%"></i></div>
+      <pre id="onbLog">${esc(j.log.join("\n"))}</pre><div class="lead" style="margin-top:8px">每个脚本通常几秒到半分钟，期间不要关闭程序。</div>`);
+    const lg = $("onbLog"); lg.scrollTop = lg.scrollHeight;
+    setTimeout(pollJob, 1000); return;
+  }
+  onb.running = false;
+  const r = j.result;
+  if (!r) { modal(`<h2 class="bad">接入失败</h2><pre>${esc(j.log.join("\n"))}</pre><div class="foot"><button class="primary" onclick="closeModal()">关闭</button></div>`); return; }
+  const fails = r.renders.filter(x => !x.ok), changed = r.renders.filter(x => x.changed.length);
+  modal(`<h2>${fails.length ? "接入完成，有脚本失败" : "接入完成"}</h2><div class="lead">${esc(j.folder)}</div>
+    <div class="stat"><div><b class="${fails.length ? "bad" : "ok"}">${r.n_ok} / ${r.renders.length}</b>脚本出图成功</div>
+      <div><b>${r.n_keys}</b>张图可以编辑了</div>
+      <div><b class="${changed.length ? "warn" : "ok"}">${changed.length ? changed.length + " 个脚本" : "无"}</b>图像有变化</div></div>
+    ${changed.length ? `<p class="warn">这些图重新出图后和原来不一样（可能是脚本本身每次结果不同，或原来的 PNG 是旧版本），请看一眼：</p><ul>${changed.map(x => `<li>${esc(x.script)} → ${esc(x.changed.join(", "))}</li>`).join("")}</ul>`
+      : `<p class="ok">所有原有 PNG 逐像素一致：接入没有改动任何一张图。</p>`}
+    ${fails.length ? `<h4 class="bad">失败的脚本</h4>${fails.map(x => `<details><summary>${esc(x.script)}</summary><pre>${esc(x.log.join("\n"))}</pre></details>`).join("")}` : ""}
+    ${r.labels ? `<p>已生成图号表 <code>${esc(r.labels)}</code>，可以改成论文里的图号（例如 "Fig. 2"）。</p>` : ""}
+    <details><summary>完整日志</summary><pre>${esc(j.log.join("\n"))}</pre></details>
+    <div class="foot"><button onclick="closeModal(); refresh(false)">关闭</button>${r.n_keys ? `<button class="primary" id="onbOpen">打开这篇论文 →</button>` : ""}</div>`);
+  if ($("onbOpen")) $("onbOpen").onclick = async () => {
+    const o = await fetch("/hub/open_path", { method: "POST", body: JSON.stringify({ paper: j.folder }) }).then(r => r.json());
+    if (o.ok) location.href = "/edit"; else { toast(o.error, true); closeModal(); refresh(false); }
+  };
+  refresh(false);
+}
+$("onb").onclick = () => onboardStart();
+
+$("q").oninput = render;
+$("q").onkeydown = e => {
+  if (e.key === "Escape") { $("q").value = ""; render(); }
+  if (e.key === "Enter") { const c = document.querySelector(".card"); if (c) c.click(); }
+};
+document.addEventListener("keydown", e => { if (e.key === "/" && document.activeElement !== $("q")) { e.preventDefault(); $("q").focus(); } });
+$("rescan").onclick = () => refresh(true);
+$("addf").onclick = async () => {
+  toast("请在弹出的窗口里选择文件夹");
+  const r = await fetch("/hub/add_folder", { method: "POST", body: "{}" }).then(r => r.json());
+  if (r.ok) { toast("已加入扫描：" + r.path); refresh(false); } else if (r.error) toast(r.error, true);
+};
+$("quit").onclick = async () => {
+  if (!confirm("退出论文调图？已保存的调整都在各论文的 *.tweaks.json 里。")) return;
+  await fetch("/hub/quit", { method: "POST", body: "{}" }).catch(() => {});
+  $("veilText").textContent = "已退出，可以关闭这个窗口。"; $("veil").className = "on";
+  setTimeout(() => window.close(), 400);
+};
+const beat = () => navigator.sendBeacon("/hub/beat");
+beat(); setInterval(beat, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { beat(); refresh(false); } });
+window.addEventListener("pagehide", () => navigator.sendBeacon("/hub/bye"));
+refresh(false);
+{ const want = new URLSearchParams(location.search).get("onboard");
+  if (want) { history.replaceState(null, "", "/"); onboardStart(want); } }
+fetch("/hub/onboard/job").then(r => r.json()).then(j => { if (j.folder && !j.finished) { onb.running = true; pollJob(); } });
+</script>
+</body>
+</html>

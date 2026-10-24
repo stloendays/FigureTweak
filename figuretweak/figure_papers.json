@@ -1,0 +1,5 @@
+{
+ "_comment": "Default folders FigureTweak scans for editable figures (*.tweak_keys.json). Copy this file to %LOCALAPPDATA%\figure_hub\papers.json to change them, or add folders from the page. papers: optional display names keyed by a repository's main checkout.",
+ "scan_roots": ["~/Documents", "~/Desktop", "~/source/repos", "~/repos", "~/GitHub"],
+ "papers": {}
+}
