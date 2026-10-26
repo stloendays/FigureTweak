@@ -10,7 +10,8 @@ draw and before anything changes, so they stay valid after an adjustment.
 
 Adjustable, per kind (lengths in mm; size, scale and lw are factors; colours are hex):
     figure      background, colors {old: new} over the whole figure; frame, tickdir for every chart and
-                textbox ("none": no border on boxed texts) for every text, unless the item sets its own
+                textbox ("none": no border on boxed texts, and a white box left without a border goes too) for every
+                text, unless the item sets its own
     axes        dx_mm, dy_mm, dw_mm, dh_mm (top-left fixed), background, background_alpha, lw (frame and ticks),
                 colors, visible;
                 frame ("full", "open": the two axis sides only, "none"), tickdir ("in", "out", "inout"),
@@ -802,10 +803,15 @@ def _house_defaults(fig):
                 if not (isinstance(e, pe.withStroke) and _near_white(e._gc.get("foreground", "black")))]
         if len(keep) != len(effects):
             t.set_path_effects(keep)
-        bp = t.get_bbox_patch()
-        if bp is not None and _near_white(bp.get_facecolor()) and (
-                bp.get_linewidth() == 0 or bp.get_edgecolor()[3] == 0):
-            t.set_bbox(None)
+        _drop_masking_box(t)
+
+
+def _drop_masking_box(t):
+    """Remove a white or near-white box without a visible edge: it only masks what lies behind the text."""
+    bp = t.get_bbox_patch() if isinstance(t, Text) else None
+    if bp is not None and _near_white(bp.get_facecolor()) and (
+            bp.get_linewidth() == 0 or bp.get_edgecolor()[3] == 0):
+        t.set_bbox(None)
 
 
 def apply(fig, here, stem, rerun_args=None):
@@ -912,6 +918,7 @@ def apply(fig, here, stem, rerun_args=None):
                 it["artist"].tick_params(axis="both", which="both", direction=fw["tickdir"])
         elif it["kind"] in ("text", "axislabel") and fw.get("textbox") == "none" and "border" not in own:
             _set_border(it["artist"], False)
+            _drop_masking_box(it["artist"])        # a borderless white box is the masking background the defaults remove
     W_pt, H_pt2 = fig.get_size_inches() * 72
     for ax, ak in axk.items():                     # where each chart ends up, for the editor's data reader
         rec = ids.get(_gid(ak + "/axes"))

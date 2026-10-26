@@ -57,8 +57,8 @@ Scripts that call `savefig` directly are listed, not changed. Convert them to a 
 All stored in `<stem>.tweaks.json`, so the script stays the source and every setting can be switched back:
 
 - **Frame** per chart (`frame`: `full` 有框线, `open` 无框线 = only the two sides carrying tick labels, `none` 无轴线), or
-  for the whole figure on `fig/figure` together with `textbox: "none"` (boxed annotations lose the border, keep the
-  white fill) and `tickdir`. A chart's own setting wins. The canvas panel's 「把这三项用到全稿所有图」 writes the
+  for the whole figure on `fig/figure` together with `textbox: "none"` (boxed annotations lose the border, and a white
+  fill left without a border goes too; an item's own `border: false` keeps its white fill) and `tickdir`. A chart's own setting wins. The canvas panel's 「把这三项用到全稿所有图」 writes the
   figure-level setting into every figure of the paper and re-renders them.
 - **Axis dialog** per chart: `xlim`/`ylim`, `xscale`/`yscale`, `xstep`/`ystep`, `xminor`/`yminor`, `grid`,
   `tickdir`; applied before the figure is keyed, so the new tick labels are editable too.
