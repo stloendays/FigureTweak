@@ -527,9 +527,13 @@ def make_handler(st):
 
 def watchdog(st):
     """Stop once the last window has said goodbye and not come back, or after ten minutes without any window."""
+    tick = time.time()
     while True:
         time.sleep(5)
         now = time.time()
+        if now - tick > 60:                             # the machine slept: give open windows time to beat again
+            st["beat"], st["bye"] = now, None
+        tick = now
         busy = st.get("job") and not st["job"].get("finished")
         if not busy and ((st["bye"] and st["beat"] < st["bye"] and now - st["bye"] > 60) or now - st["beat"] > 600):
             st["server"].shutdown()

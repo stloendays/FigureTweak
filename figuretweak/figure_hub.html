@@ -194,8 +194,15 @@ function matches(p, q) {
       || p.versions.some(v => (v.name + " " + v.branch).toLowerCase().includes(q) || v.figs.some(f => (f.label + " " + f.stem).toLowerCase().includes(q)));
 }
 
+const HUB_GONE = "论文调图的后台已退出，请关闭这个窗口，再双击桌面上的「论文调图」重新打开。";
 async function refresh(rescan) {
-  data = await fetch("/hub/papers" + (rescan ? "?rescan=1" : "")).then(r => r.json());
+  try {
+    data = await fetch("/hub/papers" + (rescan ? "?rescan=1" : "")).then(r => r.json());
+  } catch (e) {                                   // the hub has stopped: an empty list would look like lost papers
+    $("veilText").textContent = HUB_GONE; $("veil").className = "on";
+    return;
+  }
+  if ($("veilText").textContent === HUB_GONE) $("veil").className = "";
   render();
   clearTimeout(polling);
   if (data.scanning) polling = setTimeout(() => refresh(false), 1500);
