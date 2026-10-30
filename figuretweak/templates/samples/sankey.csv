@@ -1,0 +1,12 @@
+from,to,amount
+Gas,Reforming,62
+Coal,Gasification,21
+Power,Electrolysis,12
+Biomass,Gasification,5
+Reforming,Ammonia,34
+Reforming,Methanol,15
+Reforming,Refining,13
+Gasification,Ammonia,11
+Gasification,Methanol,15
+Electrolysis,Ammonia,7
+Electrolysis,Mobility,5

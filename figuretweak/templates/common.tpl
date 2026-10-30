@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(HERE, STYLE_DIR)))
 import style as S  # noqa: E402  the paper's house style: Page and its colours
 from style import Page  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.font_manager import FontProperties  # noqa: E402
 
 INK = getattr(S, "INK", "#1b1b1b")
 MUTED = getattr(S, "MID", "#5f646c")
@@ -18,7 +19,6 @@ PALETTE = [c for c in (getattr(S, n, None) for n in ("RU", "FE", "AMB", "OS", "D
                                                       "BLUE", "GREEN", "ORANGE"))
            if isinstance(c, str) and c.startswith("#")]
 PALETTE = list(dict.fromkeys(PALETTE)) or ["#5677b5", "#6e9f60", "#e0913a", "#97abd4", "#304c86", "#467238"]
-SMALL = plt.rcParams["xtick.labelsize"]          # annotation size: the paper's tick-label size
 
 
 def read_table(path):
@@ -61,6 +61,31 @@ def chart(left=14.0, bottom=11.0, right=3.0, top=None):
     return pg.ax(left, bottom, WIDTH_MM - left - right, HEIGHT_MM - bottom - top)
 
 
+def polar_chart(left=6.0, bottom=6.0, right=6.0, top=None):
+    """A polar axes (radar, rose), in mm from the page's edges."""
+    top = (10.0 if TITLE else 6.0) if top is None else top
+    w, h = WIDTH_MM - left - right, HEIGHT_MM - bottom - top
+    return pg.fig.add_axes([left / WIDTH_MM, bottom / HEIGHT_MM, w / WIDTH_MM, h / HEIGHT_MM], projection="polar")
+
+
+def numeric_columns(names=""):
+    """The columns in a comma-separated list, or every column that holds only numbers."""
+    if names.strip():
+        cols = [c.strip() for c in names.split(",") if c.strip()]
+        for c in cols:
+            column(c)
+        return cols
+    return [c for c in T if T[c] and not np.isnan(numbers(T[c])).any()]
+
+
+def kde(d, grid, bw=0.0):
+    """Gaussian kernel density of the values d on grid (Scott's bandwidth unless bw > 0)."""
+    d = d[~np.isnan(d)]
+    h = bw or (1.06 * np.std(d, ddof=1) * len(d) ** -0.2 if len(d) > 1 else 0) or 1.0
+    z = (grid[:, None] - d[None, :]) / h
+    return np.exp(-0.5 * z * z).sum(1) / (len(d) * h * np.sqrt(2 * np.pi))
+
+
 def finish(ax):
     if TITLE:
         pg.fig.text(1.0 / WIDTH_MM, 1 - 1.0 / HEIGHT_MM, TITLE, fontweight="bold", va="top", ha="left")
@@ -71,3 +96,4 @@ T = read_table(DATA)
 pg = Page(WIDTH_MM, HEIGHT_MM)
 _fam = plt.rcParams["font.family"]                # set after Page, which applies the paper's fonts: Chinese text
 plt.rcParams["font.family"] = list(_fam if isinstance(_fam, list) else [_fam]) + ["Microsoft YaHei", "SimHei"]
+SMALL = FontProperties(size=plt.rcParams["xtick.labelsize"]).get_size_in_points()   # annotations: tick-label size

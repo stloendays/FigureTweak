@@ -98,6 +98,19 @@
   table.grid th { font-weight:700; }
   td.bad { color:var(--red); font-weight:700; }
   .ok { color:var(--green-d); font-weight:700; }
+  /* data dialog */
+  .dlg.wide { width:min(1180px, 96vw); }
+  .dwrap { max-height:46vh; overflow:auto; border:1px solid var(--rule); width:fit-content; max-width:100%; }
+  table.dgrid { border-collapse:collapse; font-size:13px; }
+  table.dgrid th, table.dgrid td { border:1px solid var(--line); padding:0; }
+  table.dgrid th { background:#fff; position:sticky; top:0; padding:3px 6px; font-weight:700; white-space:nowrap; z-index:1; }
+  table.dgrid td.rn { padding:0 6px; text-align:right; font-weight:700; white-space:nowrap; }
+  table.dgrid input { border:none; padding:3px 6px; width:96px; font:13px Consolas, "Microsoft YaHei", monospace; }
+  table.dgrid input.hd { width:86px; font-weight:700; border-bottom:1px dashed var(--line); }
+  table.dgrid input:focus { outline:2px solid var(--blue); outline-offset:-2px; }
+  table.dgrid input.ro { color:var(--ink); background:#f4f6f9; }
+  button.mini { padding:0 6px; font-size:12px; margin-left:3px; }
+  .tagc { font-size:12px; padding:0 6px; border-radius:3px; background:#fbe9ea; color:var(--red); font-weight:700; }
 </style>
 </head>
 <body>
@@ -118,6 +131,7 @@
   <span class="sep"></span>
   <button id="painter" title="把所选对象的字号、粗细、颜色、线宽刷给别的对象">格式刷</button>
   <button id="consist" title="检查所有图的分图字母、标题、坐标轴标题、刻度字号是否统一">全稿一致性</button>
+  <button id="dataBtn" title="看和改图里的数据，给图表加柱、线、点；模板做的图还能改源数据表和图表类型">数据</button>
   <span class="sep"></span>
   <button id="zout" class="icon" title="缩小">−</button>
   <span id="zpct" style="min-width:46px;text-align:center;font-weight:700">100%</span>
@@ -684,6 +698,7 @@ function dispName(it) {
   if (TEXTY.has(it.kind)) return one(textOf(it, cur[it.key])) || "（空文字）";
   if (it.kind === "ticks") return (it.axis === "x" ? "横轴" : "纵轴") + "刻度/类别";
   const n = it.key.match(/\/(\d+)$/);
+  if (it.added_series) return "＋ " + (it.name || "添加的" + ({ bar: "柱", err: "误差棒", line: "线", band: "误差带", points: "点", area: "面积" }[it.key.split("/").pop()] || ""));
   return it.name || (KINDS[it.kind] + (n ? " " + (+n[1] + 1) : ""));
 }
 const isHidden = it => (cur[it.key] || {}).visible === false;
@@ -1144,6 +1159,17 @@ function drawProps() {
       r.onchange = () => { push(); if (+r.value === 1) delete c.background_alpha; else c.background_alpha = +r.value; afterEdit(false); };
       g.append(el("label", { text: "不透明度" }), r); b.appendChild(g);
       if (it.frame) axesProps(it, c);
+      if (hasData() && (it.series || it.frame) || (c.series || []).length) {
+        const d = section("数据与系列");
+        btnRow(d, "数据", [["查看 / 修改", 0, () => openData(it.key)], ["＋ 添加系列", 0, () => openAddSeries(it), "在这个图表上加柱、折线、散点或面积"]]);
+        (c.series || []).forEach((s, i) => btnRow(d, i ? "" : "添加的", [[`${(SERIES_TYPES.find(t => t[0] === s.type) || [0, s.type])[1]}：${s.label || s.id}`, 0, () => openAddSeries(it, i)],
+          ["×", 0, () => { push(); c.series = c.series.filter((_, j) => j !== i); if (!c.series.length) delete c.series; afterEdit(); }, "删除（保存出图后生效）"]]));
+        if (c.data) btnRow(d, "", [[`恢复脚本原数据（${Object.keys(c.data).length} 组已改）`, 0, () => { push(); delete c.data; afterEdit(); }]]);
+      }
+    }
+    if (it.added_series) {
+      const ax = axesOf(it.key), sid = it.key.split("/").slice(-2)[0], i = ax ? (curOf(ax.key).series || []).findIndex(s => String(s.id) === sid) : -1;
+      if (i >= 0) btnRow(section("添加的系列"), "", [["编辑这个系列的数据", 0, () => openAddSeries(ax, i)]]);
     }
     if (it.kind === "legend") legendProps(it, c);
     colorSection("颜色", it.key, it.added ? [((c.add || {}).color || "#1b1b1b")] : it.colors, "点一个颜色再选新颜色；只换这一种颜色，其余不变。");
@@ -1158,6 +1184,302 @@ function drawLog() {
   $("props").appendChild(el("h3", { text: "出图日志" }));
   $("props").appendChild(el("pre", { id: "log", text: drawLog.text || "—" }));
 }
+
+// ---- data: the values a chart shows, series added to it, and a template figure's own table and settings ----------
+const SERIES_KIND = { bars: "柱", errorbar: "误差棒", line: "线", scatter: "散点", image: "热图矩阵" };
+const SERIES_TYPES = [["bar", "柱"], ["line", "折线"], ["scatter", "散点"], ["area", "面积"]];
+const COLNAME = { x: "x / 类别", y: "y / 数值", err: "误差 ±" };
+const hasData = () => String(meta.tweak_version || "") >= "1.3";
+const axesOf = key => Object.values(items).find(x => x.kind === "axes" && x.prefix && (key === x.key || key.startsWith(x.prefix)));
+const cellVal = v => { const t = String(v ?? "").trim(); if (t === "") return ""; const n = Number(t.replace(/−/g, "-").replace(/,/g, "")); return isNaN(n) ? t : n; };
+function chartName(ax) {
+  const charts = Object.values(items).filter(x => x.kind === "axes" && x.series);
+  return ax.panel ? `图表 ${ax.panel}` : charts.length > 1 ? `图表 ${charts.indexOf(ax) + 1}` : "图表";
+}
+function gridEditor(o) {                               // an editable table; pasting cells from Excel fills it
+  const cols = o.cols.slice(), labels = (o.labels || o.cols).slice();
+  const rows = o.rows.map(r => cols.map((_, j) => r[j] ?? ""));
+  const can = j => !o.edit || o.edit.includes(j);
+  const wrap = el("div", { class: "dwrap" });
+  const pasteAt = (i0, j0, txt) => {
+    txt.replace(/\r/g, "").replace(/\n$/, "").split("\n").forEach((line, di) => {
+      const i = i0 + di;
+      if (i >= rows.length) { if (o.fixed) return; rows.push(cols.map(() => "")); }
+      line.split("\t").forEach((c, dj) => { const j = j0 + dj; if (j < cols.length && can(j)) rows[i][j] = c.trim(); });
+    });
+    draw();
+  };
+  function draw() {
+    wrap.innerHTML = "";
+    const t = el("table", { class: "dgrid" }), hr = el("tr", {}, [el("th", { text: "" })]);
+    labels.forEach((l, j) => {
+      const th = el("th");
+      if (o.colsEditable) {
+        const i = el("input", { type: "text", class: "hd" }); i.value = l; i.onchange = () => { labels[j] = i.value.trim() || labels[j]; };
+        th.append(i, el("button", { text: "×", class: "mini", title: "删除这一列", onclick: () => { if (cols.length < 2) return;
+          cols.splice(j, 1); labels.splice(j, 1); rows.forEach(r => r.splice(j, 1)); draw(); } }));
+      } else th.textContent = l;
+      hr.appendChild(th);
+    });
+    if (o.colsEditable) hr.appendChild(el("th", {}, [el("button", { text: "＋ 列", class: "mini", onclick: () => {
+      const n = "col" + (cols.length + 1); cols.push(n); labels.push(n); rows.forEach(r => r.push("")); draw(); } })]));
+    else if (!o.fixed) hr.appendChild(el("th"));
+    t.appendChild(hr);
+    rows.forEach((r, i) => {
+      const tr = el("tr", {}, [el("td", { class: "rn", text: o.rowNames ? o.rowNames[i] : i + 1 })]);
+      r.forEach((v, j) => {
+        const inp = el("input", { type: "text" }); inp.value = v ?? "";
+        if (!can(j)) { inp.readOnly = true; inp.className = "ro"; }
+        inp.onchange = () => { r[j] = inp.value; };
+        inp.onpaste = e => { const txt = (e.clipboardData || window.clipboardData).getData("text");
+          if (!/[\t\n]/.test(txt.replace(/\s+$/, ""))) return; e.preventDefault(); pasteAt(i, j, txt); };
+        tr.appendChild(el("td", {}, [inp]));
+      });
+      if (!o.fixed) tr.appendChild(el("td", {}, [el("button", { text: "×", class: "mini", title: "删除这一行", onclick: () => { rows.splice(i, 1); draw(); } })]));
+      t.appendChild(tr);
+    });
+    wrap.appendChild(t);
+    if (!o.fixed) wrap.appendChild(el("button", { text: "＋ 加一行", style: "margin-top:6px", onclick: () => { rows.push(cols.map(() => "")); draw(); } }));
+  }
+  draw();
+  return { el: wrap, get: () => ({ cols: labels.slice(), rows: rows.map(r => r.slice()) }) };
+}
+function seriesViews(ax) {                             // the tables the data page shows for one chart
+  const views = [], ss = ax.series || [], used = new Set();
+  for (const kind of ["bars", "errorbar"]) {           // a script that draws every bar on its own: one table for all
+    const one = ss.filter(s => s.kind === kind && s.rows.length === 1 && !s.too_long);
+    if (one.length < 2) continue;
+    const cols = one[0].cols;
+    views.push({ title: kind === "bars" ? "柱子（每根单独画的）" : "误差棒（每根单独画的）", cols, rows: one.map(s => s.rows[0].slice()),
+      edit: kind === "bars" ? [1] : [1, 2], fixed: true, sids: one.map(s => s.sid),
+      split: rows => Object.fromEntries(one.map((s, i) => [s.sid, Object.fromEntries(cols.map((c, j) => [c, [cellVal(rows[i][j])]]).filter(([c]) => c !== "x"))])) });
+    one.forEach(s => used.add(s.sid));
+  }
+  ss.forEach((s, n) => {
+    if (used.has(s.sid)) return;
+    const title = `${SERIES_KIND[s.kind] || s.kind}${s.name ? "：" + s.name : " " + (n + 1)}`;
+    if (s.too_long) { views.push({ title, tooLong: s.n, sids: [s.sid] }); return; }
+    views.push({ title, cols: s.cols, rows: s.rows, edit: s.edit, fixed: s.fixed, sids: [s.sid], matrix: s.matrix,
+      split: rows => ({ [s.sid]: s.matrix ? { z: rows.map(r => r.map(cellVal)) }
+        : Object.fromEntries(s.cols.map((c, j) => [c, rows.map(r => cellVal(r[j]))]).filter((_, j) => s.edit.includes(j))) }) });
+  });
+  return views;
+}
+async function openData(axKey, page) {
+  const D = $("dlg"); D.classList.add("wide"); $("modal").classList.add("open");
+  D.innerHTML = "<h2>数据</h2><div class='note'>读取中…</div>";
+  const src = await fetch("/source?" + Date.now()).then(r => r.json()).catch(() => ({ files: [] }));
+  const charts = Object.values(items).filter(x => x.kind === "axes" && x.series && x.series.length);
+  const pages = [];
+  if (src.template) pages.push(["table", "源数据表"], ["settings", "图表设置"]);
+  charts.forEach(ax => pages.push([ax.key, chartName(ax) + "：画出的数值"]));
+  if (!src.template && (src.files || []).length) pages.push(["files", "数据文件"]);
+  const ax0 = axKey && axesOf(axKey);
+  page = page || (ax0 && pages.some(p => p[0] === ax0.key) ? ax0.key : pages.length ? pages[0][0] : null);
+  D.innerHTML = "";
+  D.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px" }, [el("h2", { text: "数据" }),
+    el("button", { text: "关闭", style: "margin-left:auto", onclick: closeDlg })]));
+  if (!pages.length) {
+    D.appendChild(el("div", { class: "note", text: hasData() ? "这张图里没有可读出的数据系列（柱、线、点、热图）。" :
+      "这篇论文的 tweak.py 是旧版，读不出图里的数据：在论文列表点「接入新论文」，选这篇论文的图文件夹再接入一次即可升级。" }));
+    return;
+  }
+  const tabs = el("div", { class: "btns", style: "margin:6px 0 10px" });
+  pages.forEach(([k, name]) => { const b = el("button", { text: name, onclick: () => openData(axKey, k) }); if (k === page) b.className = "on"; tabs.appendChild(b); });
+  D.appendChild(tabs);
+  const body = el("div"); D.appendChild(body);
+  if (page === "table") tablePage(body, src);
+  else if (page === "settings") settingsPage(body, src);
+  else if (page === "files") filesPage(body, src);
+  else chartDataPage(body, items[page]);
+}
+function closeDlg() { $("modal").classList.remove("open"); $("dlg").classList.remove("wide"); }
+function chartDataPage(body, ax) {
+  const c = curOf(ax.key), views = seriesViews(ax), grids = [];
+  body.appendChild(el("div", { class: "note", text: "这里是图上画出来的数值，改好后「应用并重新出图」。可以从 Excel 复制一块单元格，点表格里的起始格粘贴。" +
+    "数值改动记在这张图的调整文件里，脚本和原始数据文件不动；脚本里算出来的东西（拟合线、格子里写的数字、柱顶标注）不会跟着变。" }));
+  for (const v of views) {
+    const changed = v.sids.some(s => c.data && c.data[s]);
+    const h = el("h4", { text: v.title });
+    if (changed) h.appendChild(el("span", { class: "tagc", text: "已改" }));
+    body.appendChild(h);
+    if (v.tooLong) { body.appendChild(el("div", { class: "note", text: `${v.tooLong} 个点，太多，不在这里编辑。` })); continue; }
+    const g = gridEditor({ cols: v.cols, labels: v.matrix ? v.cols.map((_, j) => "列 " + (j + 1)) : v.cols.map(x => COLNAME[x] || x),
+                           rows: v.rows, edit: v.edit, fixed: v.fixed });
+    grids.push([v, g]); body.appendChild(g.el);
+    if (changed) body.appendChild(el("button", { text: "恢复脚本原数据", style: "margin-top:6px", onclick: () => {
+      push(); v.sids.forEach(s => delete c.data[s]); if (!Object.keys(c.data).length) delete c.data; closeDlg(); afterEdit(); $("save").click(); } }));
+  }
+  const sv = c.series || [];
+  if (sv.length) {
+    body.appendChild(el("h4", { text: "在编辑器里添加的系列" }));
+    sv.forEach((s, i) => body.appendChild(el("div", { class: "btns", style: "margin:3px 0" }, [
+      el("span", { text: `${(SERIES_TYPES.find(t => t[0] === s.type) || [0, s.type])[1]}：${s.label || s.id}（${(s.y || []).length} 个点）` }),
+      el("button", { text: "编辑", onclick: () => openAddSeries(ax, i) })])));
+  }
+  body.appendChild(el("div", { class: "btns", style: "margin-top:16px" }, [
+    el("button", { class: "primary", text: "应用并重新出图", onclick: () => {
+      const upd = {};
+      for (const [v, g] of grids) {
+        const rows = g.get().rows;
+        if (JSON.stringify(rows.map(r => r.map(x => String(x ?? "")))) === JSON.stringify(v.rows.map(r => r.map(x => String(x ?? ""))))) continue;
+        Object.assign(upd, v.split(rows));
+      }
+      if (!Object.keys(upd).length) { closeDlg(); return; }
+      push(); c.data = Object.assign({}, c.data || {}, upd); closeDlg(); afterEdit(); $("save").click();
+    } }),
+    el("button", { text: "＋ 添加系列（柱、线、点、面积）", onclick: () => openAddSeries(ax) })]));
+}
+function nextColor() {                                // the project colour that differs most from those already used
+  const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const used = (meta.palette || []).filter(x => /^#[0-9a-f]{6}$/i.test(x)).map(rgb)
+    .filter(([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) > 30);   // greys and black do not count
+  const pal = [...new Set(Object.values(meta.style_palette || {}).concat(["#d9474f", "#5677b5", "#6e9f60", "#e0913a"]))]
+    .filter(x => /^#[0-9a-f]{6}$/i.test(x) && (([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) > 30)(rgb(x)));
+  const far = x => used.length ? Math.min(...used.map(u => Math.hypot(...rgb(x).map((v, i) => v - u[i])))) : 0;
+  return pal.length ? pal.reduce((a, b) => far(b) > far(a) ? b : a) : "#d9474f";
+}
+function openAddSeries(ax, idx) {
+  const D = $("dlg"); D.classList.add("wide"); $("modal").classList.add("open");
+  const c = curOf(ax.key), list = c.series || [];
+  const ids = list.map(s => +(String(s.id).match(/\d+/) || [0])[0]);
+  const s = idx != null ? clone(list[idx]) : { id: "s" + (Math.max(0, ...ids) + 1), type: (ax.series || []).some(x => x.kind === "bars") ? "bar" : "line",
+    label: "", color: nextColor(), dodge: true, legend: true, marker: "o" };
+  const first = (ax.series || []).find(x => x.kind === "bars" || x.kind === "line" || x.kind === "scatter");
+  const xs = idx != null ? s.x : first ? (ax.series.filter(x => x.kind === first.kind && x.rows.length === 1).length > 1
+    ? ax.series.filter(x => x.kind === first.kind).map(x => x.rows[0][0]) : first.rows.map(r => r[0])) : [];
+  let rows = idx != null ? s.x.map((x, i) => [x, (s.y || [])[i] ?? "", (s.err || [])[i] ?? ""]) : (xs.length ? xs : ["", "", ""]).map(x => [x, "", ""]);
+  const draw = () => {
+    D.innerHTML = "";
+    D.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px" }, [el("h2", { text: (idx != null ? "编辑系列" : "添加系列") + " · " + chartName(ax) }),
+      el("button", { text: "取消", style: "margin-left:auto", onclick: closeDlg })]));
+    const f = el("div", { class: "prop", style: "grid-template-columns:110px 1fr;max-width:640px" });
+    btnRow(f, "画成", SERIES_TYPES.map(([t, n]) => [n, s.type === t, () => { rows = g.get().rows; s.type = t; draw(); }]));
+    const nm = el("input", { type: "text", placeholder: "图例里的名字（可空）" }); nm.value = s.label || ""; nm.oninput = () => { s.label = nm.value; };
+    f.append(el("label", { text: "名称" }), nm);
+    const sw = el("div", {}, [el("div", { class: "swatches" }, [swatch(s.color, { title: s.color })]),
+      palettePicker(col => { rows = g.get().rows; s.color = col.toLowerCase(); draw(); })]);
+    f.append(el("label", { text: "颜色" }), sw);
+    const opt = (label, k, title) => { const l = el("label", { style: "margin-right:14px", title: title || "" , html: `<input type="checkbox" ${s[k] ? "checked" : ""}> ${label}` });
+      l.querySelector("input").onchange = e => { s[k] = e.target.checked; }; return l; };
+    const opts = el("div");
+    if (s.type === "bar") opts.appendChild(opt("和原有的柱并排", "dodge", "原有的柱子变窄让出位置；不勾则叠在原位置上"));
+    if (s.type === "line") { opts.appendChild(opt("画数据点", "marker_on")); opts.appendChild(opt("误差画成色带", "band")); }
+    opts.appendChild(opt("加入图例", "legend"));
+    f.append(el("label", { text: "选项" }), opts);
+    D.appendChild(f);
+    D.appendChild(el("h4", { text: "数据" }));
+    D.appendChild(el("div", { class: "note", text: "x 填类别名（和横轴上的一样）或数值；误差可空。可以从 Excel 复制两三列，点第一格粘贴。" }));
+    const g = gridEditor({ cols: ["x", "y", "err"], labels: ["x / 类别", "y / 数值", "误差 ±（可空）"], rows, fixed: false });
+    D.appendChild(g.el);
+    const bt = el("div", { class: "btns", style: "margin-top:16px" }, [el("button", { class: "primary", text: idx != null ? "确定并重新出图" : "添加并重新出图", onclick: () => {
+      const r = g.get().rows.filter(x => String(x[0]).trim() !== "" && String(x[1]).trim() !== "" && !isNaN(Number(String(x[1]).replace(/−/g, "-"))));
+      if (!r.length) { alert("至少要有一行 x 和 y 都填了数值。"); return; }
+      const out = Object.assign({}, s, { x: r.map(x => cellVal(x[0])), y: r.map(x => cellVal(x[1])) });
+      if (r.some(x => String(x[2]).trim() !== "")) out.err = r.map(x => cellVal(x[2]) === "" ? 0 : cellVal(x[2])); else delete out.err;
+      if (out.type === "line") out.marker = out.marker_on === false ? "" : "o";
+      push(); c.series = list.slice(); if (idx != null) c.series[idx] = out; else c.series.push(out);
+      closeDlg(); afterEdit(); $("save").click();
+    } })]);
+    if (idx != null) bt.appendChild(el("button", { class: "danger", text: "删除这个系列", onclick: () => {
+      push(); c.series = list.filter((_, j) => j !== idx); if (!c.series.length) delete c.series; closeDlg(); afterEdit(); $("save").click(); } }));
+    D.appendChild(bt);
+  };
+  if (s.marker_on === undefined) s.marker_on = s.marker !== "";
+  draw();
+}
+function tablePage(body, src) {
+  const t = src.table;
+  body.appendChild(el("div", { class: "note", text: `这张图由模板「${src.template.name}」生成，画的就是这张表（${src.data_file}）。改表、加行加列都可以；列名改了的话到「图表设置」里重新对应。` }));
+  const g = gridEditor({ cols: t.columns, rows: t.rows, colsEditable: true });
+  body.appendChild(g.el);
+  body.appendChild(el("div", { class: "btns", style: "margin-top:14px" }, [
+    el("button", { class: "primary", text: "保存表格并重新出图", onclick: () => {
+      const v = g.get(); if (new Set(v.cols).size !== v.cols.length) { alert("列名有重复。"); return; }
+      closeDlg(); post("/source_save", { table: { columns: v.cols, rows: v.rows } }); } }),
+    el("button", { text: "用 Excel 打开", title: "改完保存，再点「保存并重新出图」或重新打开这个对话框", onclick: () =>
+      fetch("/open_path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: src.data_file }) }) })]));
+}
+function fieldInput(f, value, cols, table) {           // one chart setting, by its kind in the template catalog
+  const [k, label, kind] = f;
+  let inp;
+  if (kind === "text" || kind === "number" || kind === "text?" || kind === "number?") {
+    inp = el("select");
+    const opt = kind.endsWith("?") ? [["", "（不选）"]] : [];
+    inp.innerHTML = opt.concat(cols.map(c => [c, c])).map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("");
+    inp.value = cols.includes(value) || value === "" ? value : (kind.endsWith("?") ? "" : cols[0]);
+  } else if (kind === "bool") { inp = el("input", { type: "checkbox" }); inp.checked = !!value; }
+  else if (kind === "int" || kind === "float") { inp = el("input", { type: "number", step: kind === "int" ? 1 : "any" }); inp.value = value; }
+  else if (kind.startsWith("choice:")) {
+    inp = el("select"); inp.innerHTML = kind.slice(7).split(",").map(p => p.split("=")).map(([v, n]) => `<option value="${esc(v)}">${esc(n || v)}</option>`).join("");
+    inp.value = value;
+  } else if (kind.startsWith("value:")) {
+    inp = el("select"); inp._valueOf = kind.slice(6); inp._table = table; inp._value = value;
+  } else { inp = el("input", { type: "text" }); inp.value = value ?? ""; }
+  inp.dataset.key = k; inp.dataset.kind = kind;
+  return [el("label", { text: label }), inp];
+}
+function settingsPage(body, src, tid) {
+  tid = tid || src.template.template;
+  const cat = src.catalog, t = cat.templates.find(x => x.id === tid), same = tid === src.template.template;
+  const cols = src.table.columns, fig = src.template.figure;
+  const vals = Object.assign({}, t.defaults, same ? src.template.values : {});
+  if (!same) for (const f of t.fields) {               // a new chart type: keep matching settings, guess the columns
+    if (src.template.values[f[0]] !== undefined && typeof src.template.values[f[0]] === typeof t.defaults[f[0]] &&
+        (!/^(text|number)/.test(f[2]) || cols.includes(src.template.values[f[0]]))) vals[f[0]] = src.template.values[f[0]];
+    else if (/^(text|number)\??$/.test(f[2]) && !cols.includes(vals[f[0]])) {
+      const want = f[2].startsWith("number"), isNum = j => src.table.numeric[j];
+      const pick = cols.find((c, j) => isNum(j) === want && !Object.values(vals).includes(c)) || cols.find((c, j) => isNum(j) === want);
+      vals[f[0]] = f[2].endsWith("?") ? "" : (pick || cols[0]);
+    }
+  }
+  const f0 = el("div", { class: "prop", style: "grid-template-columns:150px 1fr;max-width:720px" });
+  const sel = el("select");
+  sel.innerHTML = cat.purposes.map(([p, pn]) => `<optgroup label="${esc(pn)}">` + cat.templates.filter(x => x.purpose === p)
+    .map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join("") + "</optgroup>").join("");
+  sel.value = tid; sel.onchange = () => { body.innerHTML = ""; settingsPage(body, src, sel.value); };
+  f0.append(el("label", { text: "图表类型" }), sel);
+  if (!same) f0.append(el("div"), el("div", { class: "note", style: "color:var(--red);font-weight:700", text:
+    `换成「${t.name}」会重写脚本的画图部分；原来在编辑器里做的手动调整大多对应不上，需要重新调。` }));
+  f0.append(el("label", { text: "说明" }), el("div", { class: "note", text: t.when }));
+  const W = el("input", { type: "number", step: 1 }); W.value = fig.WIDTH_MM;
+  const H = el("input", { type: "number", step: 1 }); H.value = fig.HEIGHT_MM;
+  f0.append(el("label", { text: "宽 × 高（mm）" }), el("div", { class: "pair" }, [W, H]));
+  const T = el("input", { type: "text", placeholder: "可空" }); T.value = fig.TITLE || "";
+  f0.append(el("label", { text: "图内标题" }), T);
+  body.appendChild(f0);
+  body.appendChild(el("h4", { text: "列与选项" }));
+  const f = el("div", { class: "prop", style: "grid-template-columns:150px 1fr;max-width:720px" });
+  const inputs = t.fields.map(fd => { const [l, i] = fieldInput(fd, vals[fd[0]], cols, src.table); f.append(l, i); return i; });
+  const fillValues = () => inputs.filter(i => i._valueOf).forEach(i => {
+    const colIn = inputs.find(x => x.dataset.key === i._valueOf), j = cols.indexOf(colIn ? colIn.value : "");
+    const opts = j < 0 ? [] : [...new Set(src.table.rows.map(r => r[j]).filter(v => v !== ""))];
+    const keep = i.value || i._value;
+    i.innerHTML = [["", "（无）"]].concat(opts.map(v => [v, v])).map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("");
+    i.value = opts.includes(keep) ? keep : "";
+  });
+  inputs.forEach(i => { if (/^(text|number)/.test(i.dataset.kind)) i.addEventListener("change", fillValues); });
+  fillValues();
+  body.appendChild(f);
+  body.appendChild(el("div", { class: "note", text: "改宽高会让图表位置变化，编辑器里对图表的位置调整可能要重做。" }));
+  body.appendChild(el("div", { class: "btns", style: "margin-top:14px" }, [el("button", { class: "primary", text: "保存设置并重新出图", onclick: () => {
+    const values = {};
+    for (const i of inputs) {
+      const k = i.dataset.key, kind = i.dataset.kind;
+      values[k] = kind === "bool" ? i.checked : kind === "int" ? parseInt(i.value || "0", 10) : kind === "float" ? parseFloat(i.value || "0") : i.value;
+    }
+    if (!same && !confirm(`把这张图换成「${t.name}」并重写脚本的画图部分？`)) return;
+    closeDlg();
+    post("/source_save", { template: tid, values, figure: { WIDTH_MM: +W.value || fig.WIDTH_MM, HEIGHT_MM: +H.value || fig.HEIGHT_MM, TITLE: T.value } });
+  } })]));
+}
+function filesPage(body, src) {
+  body.appendChild(el("div", { class: "note", text: "这张图的脚本读这些数据文件。用 Excel 等程序打开、修改并保存，再点下面的「按现在的数据重新出图」。" }));
+  for (const p of src.files) body.appendChild(el("div", { class: "btns", style: "margin:4px 0" }, [el("span", { class: "kv", text: p }),
+    el("button", { text: "打开", onclick: () => fetch("/open_path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: p }) }) })]));
+  body.appendChild(el("div", { class: "btns", style: "margin-top:14px" }, [el("button", { class: "primary", text: "按现在的数据重新出图", onclick: () => { closeDlg(); post("/render", {}); } })]));
+}
+$("dataBtn").onclick = () => openData(sel ? sel.key : null);
 
 // ---- consistency across figures ------------------------------------------------------------------------------------
 async function openConsistency() {

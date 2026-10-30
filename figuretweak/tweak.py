@@ -18,7 +18,12 @@ Adjustable, per kind (lengths in mm; size, scale and lw are factors; colours are
                 grid ("none", "x", "y", "both"), refs [{axis, v, color, ls, lw, label}] reference lines,
                 and Origin's axis dialog, applied before the figure is keyed so the editor sees the new ticks:
                 xlim/ylim [lo, hi], xscale/yscale ("linear", "log"), xstep/ystep (major tick spacing),
-                xminor/yminor (minor ticks on or off)
+                xminor/yminor (minor ticks on or off);
+                the plotted data, applied first (the keys file lists each chart's series under "series"):
+                data {sid: {x, y, err} or {z}} replaces the values of a series the script drew (sid "bars/0",
+                "line/2", "scatter/0", "errorbar/0", "image/0"), and series [{id, type ("bar", "line", "scatter",
+                "area"), x, y, err, label, color, dodge, band, marker, legend}] adds series, keyed
+                "<axes>/series/<id>/<part>"; added bars with dodge stand beside the script's bars
     text        texts, annotation labels, titles, letters: dx_mm, dy_mm, size, text, weight, style, rotation (deg),
                 ha (left/center/right), colors, alpha, visible, border (false: a boxed text keeps its fill only)
                 (an annotation's leader line keeps its data end and follows the label)
@@ -46,8 +51,10 @@ import sys
 from collections import Counter
 
 import matplotlib
+import numpy as np
 from matplotlib.axis import Axis
-from matplotlib.collections import Collection, PathCollection
+from matplotlib.collections import Collection, LineCollection, PathCollection, PolyCollection
+from matplotlib.container import BarContainer, ErrorbarContainer
 from matplotlib.colors import LinearSegmentedColormap, to_hex, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.legend import Legend
@@ -59,7 +66,7 @@ from matplotlib.ticker import (AutoMinorLocator, FixedLocator, Formatter, FuncFo
                                NullFormatter, NullLocator)
 from matplotlib.transforms import Affine2D, Bbox, ScaledTranslation, blended_transform_factory
 
-TWEAK_VERSION = "1.2"                                # onboarding replaces an older copy in a project
+TWEAK_VERSION = "1.3"                                # onboarding replaces an older copy in a project
 MM = 1 / 25.4
 PT_PER_MM = 72 * MM
 
@@ -247,12 +254,17 @@ def _items(fig):
                 items.append(dict(key="%s/%sticks" % (ak, name), kind="ticks", artist=axis, axis=name,
                                   side=labs[0][1], members=[lab for lab, _ in labs]))
         legends_of(ak, [ax.legend_] if ax.legend_ is not None else [])
-        for i, c in enumerate(x for x in ax.collections if isinstance(x, PathCollection) and len(x.get_offsets())):
+        own = lambda a: not hasattr(a, "_tw_key")  # noqa: E731  (series added in the editor are keyed below)
+        for i, c in enumerate(x for x in ax.collections if isinstance(x, PathCollection) and len(x.get_offsets())
+                              and own(x)):
             items.append(dict(key="%s/scatter/%d" % (ak, i), kind="scatter", artist=c))
-        for i, c in enumerate(x for x in ax.collections if not isinstance(x, PathCollection)):
+        for i, c in enumerate(x for x in ax.collections if not isinstance(x, PathCollection) and own(x)):
             items.append(dict(key="%s/collection/%d" % (ak, i), kind="collection", artist=c))
-        for i, ln in enumerate(ax.lines):
+        for i, ln in enumerate(x for x in ax.lines if own(x)):
             items.append(dict(key="%s/line/%d" % (ak, i), kind="line", artist=ln))
+        for a in list(ax.collections) + list(ax.lines):
+            if hasattr(a, "_tw_kind"):
+                items.append(dict(key=a._tw_key, kind=a._tw_kind, artist=a, added_series=True))
         for i, p in enumerate(ax.patches):
             items.append(dict(key="%s/patch/%d" % (ak, i), kind="patch", artist=p))
         for i, im in enumerate(ax.images):
@@ -576,6 +588,397 @@ def _add_refs(ax, refs):
     ax.set_ylim(yl)
 
 
+# ---- the plotted data: read, replaced, and series added in the editor (FigureTweak 1.3) ----------------------------
+
+DATA_ROWS = 2000                                     # longer series are listed but not offered for editing
+
+
+def _num(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return None if f != f else float("%.6g" % f)
+
+
+def _categories(axis):
+    """{position: name} of a categorical axis, else None."""
+    m = getattr(getattr(axis, "units", None), "_mapping", None)
+    return {v: k for k, v in m.items()} if isinstance(m, dict) and m else None
+
+
+def _names(axis):
+    """{position: name}: the categories of a categorical axis, or the text tick labels the script set."""
+    cats = _categories(axis)
+    if cats:
+        return {float(k): v for k, v in cats.items()}
+    try:
+        pairs = zip(axis.get_majorticklocs(), [t.get_text() for t in axis.get_majorticklabels()])
+    except Exception:                                  # noqa: BLE001 -- an axis without ticks
+        return None
+    out = {float(loc): t for loc, t in pairs if t.strip() and isinstance(_num(t.replace("−", "-")), str)}
+    return out or None
+
+
+def _axis_value(axis, v, near=False):
+    """A position on the axis as the editor shows it: the category or tick name at it (near: the nearest one within
+    half a step, for bars beside each other), else the number."""
+    names = _names(axis)
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if names:
+        locs = sorted(names)
+        k = min(locs, key=lambda x: abs(x - f))
+        step = min(np.diff(locs)) if len(locs) > 1 else 1.0
+        if abs(k - f) < (0.5 * step if near else 1e-6 * max(1.0, abs(f))):
+            return names[k]
+    return _num(f)
+
+
+def _positions(axis, vals):
+    """Values typed in the editor (numbers or category names) as positions on the axis."""
+    rev = {v: k for k, v in (_names(axis) or {}).items()}
+    cat = _categories(axis) is not None
+    out = []
+    for v in vals:
+        s = str(v).strip()
+        if s in rev:
+            out.append(rev[s])
+            continue
+        try:
+            out.append(float(s.replace("−", "-")))
+        except ValueError:
+            if not cat:
+                raise ValueError("%r is neither a number nor a category of this axis" % s)
+            axis.update_units(np.array([s]))
+            out.append(float(np.atleast_1d(axis.convert_units(s))[0]))
+    return np.asarray(out, dtype=float)
+
+
+def _floats(vals):
+    return np.asarray([np.nan if str(v).strip() in ("", "None") else float(v) for v in vals], dtype=float)
+
+
+def _script_series(ax):
+    """The data series the script drew on ax, as (sid, kind, artist or container), in a stable order."""
+    out = []
+    ebs = [c for c in ax.containers if isinstance(c, ErrorbarContainer)]
+    skip = {id(c[0]) for c in ebs if c[0] is not None} | {id(x) for c in ebs for x in (c[1] or ())}
+    for i, c in enumerate(x for x in ax.containers if isinstance(x, BarContainer)):
+        if c.patches:
+            out.append(("bars/%d" % i, "bars", c))
+    for i, c in enumerate(ebs):
+        if _eb_xy(c)[0] is not None:
+            out.append(("errorbar/%d" % i, "errorbar", c))
+    for i, ln in enumerate(ax.lines):
+        if hasattr(ln, "_tw_key") or id(ln) in skip or ln.get_transform() is not ax.transData:
+            continue
+        if len(ln.get_xdata()) < 2 and str(ln.get_marker()) in ("None", "", " "):
+            continue
+        out.append(("line/%d" % i, "line", ln))
+    for i, c in enumerate(x for x in ax.collections if isinstance(x, PathCollection) and len(x.get_offsets())):
+        if not hasattr(c, "_tw_key") and c.get_offset_transform() is ax.transData:
+            out.append(("scatter/%d" % i, "scatter", c))
+    for i, im in enumerate(ax.images):
+        a = im.get_array()
+        if a is not None and a.ndim == 2 and a.size <= 3600:
+            out.append(("image/%d" % i, "image", im))
+    return out
+
+
+def _eb_xy(c):
+    """x and y of an errorbar container: its data line, or the middles of its bars when drawn with fmt="none"."""
+    if c[0] is not None:
+        return np.asarray(c[0].get_xdata(), dtype=float), np.asarray(c[0].get_ydata(), dtype=float)
+    for lc in c[2] or ():
+        segs = lc.get_segments()
+        if segs and all(len(q) == 2 and abs(q[0][0] - q[1][0]) < 1e-12 for q in segs):
+            return np.array([q[0][0] for q in segs]), np.array([(q[0][1] + q[1][1]) / 2 for q in segs])
+    return None, None
+
+
+def _yerr_of(c):
+    """Half-lengths of an errorbar container's vertical bars, or None."""
+    for lc in c[2] or ():
+        segs = lc.get_segments()
+        if segs and all(len(s) == 2 and abs(s[0][0] - s[1][0]) < 1e-12 for s in segs):
+            return [abs(s[1][1] - s[0][1]) / 2 for s in segs]
+    return None
+
+
+def _series_table(ax, kind, a):
+    """What the editor's data table shows: columns, rows, which columns may change, and whether rows are fixed."""
+    if kind == "bars":
+        horiz = getattr(a, "orientation", None) == "horizontal"
+        rows = [[_axis_value(ax.yaxis, r.get_y() + r.get_height() / 2, True), _num(r.get_width())] if horiz else
+                [_axis_value(ax.xaxis, r.get_x() + r.get_width() / 2, True), _num(r.get_height())] for r in a.patches]
+        return dict(cols=["x", "y"], rows=rows, edit=[1], fixed=True, horizontal=horiz, name=_name(a))
+    if kind == "errorbar":
+        x, y = _eb_xy(a)
+        e = _yerr_of(a)
+        rows = [[_axis_value(ax.xaxis, x[i], True), _num(y[i])] + ([_num(e[i])] if e and len(e) == len(x) else [])
+                for i in range(len(x))]
+        return dict(cols=["x", "y"] + (["err"] if e and len(e) == len(x) else []), rows=rows, edit=[1, 2],
+                    fixed=True, name=_name(a) or (_name(a[0]) if a[0] is not None else ""))
+    if kind == "line":
+        x, y = a.get_xdata(orig=True), a.get_ydata(orig=True)
+        rows = [[_num(x[i]) if not isinstance(x[i], str) else x[i], _num(y[i])] for i in range(len(x))]
+        return dict(cols=["x", "y"], rows=rows, edit=[0, 1], fixed=False, name=_name(a))
+    if kind == "scatter":
+        rows = [[_axis_value(ax.xaxis, p[0]), _axis_value(ax.yaxis, p[1])] for p in a.get_offsets()]
+        return dict(cols=["x", "y"], rows=rows, edit=[0, 1], fixed=False, name=_name(a))
+    z = np.asarray(a.get_array(), dtype=float)
+    return dict(cols=["c%d" % (j + 1) for j in range(z.shape[1])], rows=[[_num(v) for v in r] for r in z],
+                edit=list(range(z.shape[1])), fixed=True, matrix=True, name=_name(a))
+
+
+def _set_series(ax, kind, a, d):
+    """Replace the plotted values of one series with those typed in the editor."""
+    if kind == "bars":
+        horiz = getattr(a, "orientation", None) == "horizontal"
+        for r, v in zip(a.patches, _floats(d.get("y") or [])):
+            if v == v:
+                (r.set_width if horiz else r.set_height)(v)
+    elif kind == "errorbar":
+        x, y = _eb_xy(a)
+        y = y.copy()
+        e = _floats(d["err"])[:len(y)] if d.get("err") else _yerr_of(a)
+        if d.get("y"):
+            new = _floats(d["y"])[:len(y)]
+            y[:len(new)] = new
+        if a[0] is not None:
+            a[0].set_ydata(y)
+        if e is not None:
+            e = np.resize(np.asarray(e, dtype=float), len(y))
+            xn = np.asarray(x, dtype=float)
+            for lc in a[2] or ():
+                lc.set_segments([[(xi, yi - ei), (xi, yi + ei)] for xi, yi, ei in zip(xn, y, e)])
+            caps = list(a[1] or ())
+            if len(caps) == 2:
+                caps[0].set_data(xn, y - e)
+                caps[1].set_data(xn, y + e)
+    elif kind == "line":
+        x, y = d.get("x"), d.get("y")
+        x = a.get_xdata(orig=True) if x is None else x
+        y = a.get_ydata(orig=True) if y is None else y
+        n = min(len(x), len(y))
+        try:
+            xs = _floats(x[:n])
+        except (TypeError, ValueError):
+            xs = [str(v) for v in x[:n]]
+        a.set_data(xs, _floats(y[:n]))
+    elif kind == "scatter":
+        old = a.get_offsets()
+        x = d.get("x") if d.get("x") is not None else [_axis_value(ax.xaxis, p[0]) for p in old]
+        y = d.get("y") if d.get("y") is not None else [_axis_value(ax.yaxis, p[1]) for p in old]
+        n = min(len(x), len(y))
+        a.set_offsets(np.column_stack([_positions(ax.xaxis, x[:n]), _positions(ax.yaxis, y[:n])]))
+        if len(a.get_sizes()) > 1 and len(a.get_sizes()) != n:
+            a.set_sizes(np.resize(a.get_sizes(), n))
+        if a.get_array() is not None and len(a.get_array()) != n:
+            a.set_array(np.resize(a.get_array(), n))
+        for get, put in ((a.get_facecolors, a.set_facecolor), (a.get_edgecolors, a.set_edgecolor)):
+            c = get()
+            if len(c) > 1 and len(c) != n:
+                put(np.resize(c, (n, 4)))
+    elif kind == "image" and d.get("z"):
+        z = np.array([_floats(r) for r in d["z"]], dtype=float)
+        if z.shape == a.get_array().shape:
+            a.set_data(z)
+
+
+def _bar_horizontal(ax):
+    bcs = [c for c in ax.containers if isinstance(c, BarContainer) and c.patches]
+    return bool(bcs) and all(getattr(c, "orientation", None) == "horizontal" for c in bcs)
+
+
+def _bar_slots(ax, added):
+    """(width, offset) of each added bar series. Bars set to stand beside the others ('dodge') share the width of
+    the script's bar group, and the script's bars move aside to make room."""
+    out, h = {}, _bar_horizontal(ax)
+    P = (lambda r: r.get_y()) if h else (lambda r: r.get_x())  # noqa: E731  (position and width along the
+    S = (lambda r: r.get_height()) if h else (lambda r: r.get_width())  # noqa: E731  category axis)
+    dodge = [s for s in added if s.get("type") == "bar" and s.get("dodge", True)]
+    rects = [r for c in ax.containers if isinstance(c, BarContainer) and (getattr(c, "orientation", None) == "horizontal")
+             == h for r in c.patches]
+    w0, s0 = (S(rects[0]), 0) if rects else (None, 0)
+    if rects:                                         # bars side by side form a group; its slots are the offsets
+        cen = sorted(P(r) + S(r) / 2 for r in rects)
+        groups, cur = [], [cen[0]]
+        for c in cen[1:]:
+            if c - cur[-1] < 1.3 * w0:
+                cur.append(c)
+            else:
+                groups.append(cur)
+                cur = [c]
+        groups.append(cur)
+        anchor = {}
+        for g in groups:
+            mid = (min(g) + max(g)) / 2
+            for c in g:
+                anchor[round(c, 9)] = mid
+        offs = sorted({round(c - anchor[round(c, 9)], 6) for c in cen})
+        s0 = len(offs)
+    for s in added:
+        if s.get("type") != "bar":
+            continue
+        x = _positions(ax.yaxis if h else ax.xaxis, s.get("x") or [])
+        step = np.min(np.diff(np.unique(x))) if len(np.unique(x)) > 1 else 1.0
+        out[id(s)] = (float(s.get("width") or w0 or 0.8 * step), 0.0)
+    if not dodge:
+        return out
+    group = (w0 * s0) if rects else out[id(dodge[0])][0]
+    total = s0 + len(dodge)
+    w = group / total
+    moved = {}
+    for r in rects:                                   # the script's bars move to their new slots
+        c = P(r) + S(r) / 2
+        a = anchor[round(c, 9)]
+        slot = offs.index(round(c - a, 6))
+        new = a + (slot - (total - 1) / 2) * w
+        moved[round(c, 9)] = new
+        (r.set_y if h else r.set_x)(new - w / 2)
+        (r.set_height if h else r.set_width)(w)
+    old = np.array(list(moved))
+
+    def follow(v):                                    # an x at the centre of a moved bar moves with it
+        if not len(old):
+            return v
+        i = int(np.argmin(np.abs(old - v)))
+        return moved[old[i]] if abs(old[i] - v) < 0.02 * w0 else v
+    for c in ax.containers:                           # and the script's error bars with them
+        if isinstance(c, ErrorbarContainer) and moved and not h and _eb_xy(c)[0] is not None:
+            x = _eb_xy(c)[0]
+            nx = np.array([follow(v) for v in x])
+            if np.allclose(x, nx):
+                continue
+            if c[0] is not None:
+                c[0].set_xdata(nx)
+            for cap in c[1] or ():
+                cap.set_xdata([follow(v) for v in cap.get_xdata()])
+            for lc in c[2] or ():
+                lc.set_segments([[(follow(p[0]), p[1]) for p in s] for s in lc.get_segments()])
+    for k, s in enumerate(dodge):
+        out[id(s)] = (w, (s0 + k - (total - 1) / 2) * w)
+    return out
+
+
+def _add_series(ax, ak, s, slot):
+    """Draw one series added in the editor; returns the artists that belong in the legend."""
+    typ, sid = s.get("type", "line"), str(s.get("id", "s"))
+    n = min(len(s.get("x") or []), len(s.get("y") or []))
+    h = typ == "bar" and _bar_horizontal(ax)          # bars added to a horizontal bar chart lie down too
+    x, y = _positions(ax.yaxis if h else ax.xaxis, (s.get("x") or [])[:n]), _floats((s.get("y") or [])[:n])
+    err = _floats(s["err"][:n]) if s.get("err") else None
+    col, lab = s.get("color") or "#5677b5", s.get("label") or ""
+    alpha = s.get("alpha", 1.0)
+    parts, ex = [], x
+    if typ == "bar":
+        w, off = slot or (0.8, 0.0)
+        ex = x + off
+        verts = [[(xi - w / 2, 0), (xi - w / 2, yi), (xi + w / 2, yi), (xi + w / 2, 0)] for xi, yi in zip(ex, y)]
+        if h:
+            verts = [[(q[1], q[0]) for q in v] for v in verts]
+        pc = PolyCollection(verts, facecolors=col, edgecolors=s.get("edge") or "none", linewidths=0.6, alpha=alpha,
+                            label=lab, zorder=2)
+        ax.add_collection(pc, autolim=True)
+        parts.append(("bar", "collection", pc))
+    elif typ == "area":
+        o = np.argsort(x)
+        pc = ax.fill_between(x[o], 0, y[o], color=col, alpha=s.get("alpha", 0.35), lw=0, label=lab, zorder=1.5)
+        parts.append(("area", "collection", pc))
+    elif typ == "scatter":
+        sc = ax.scatter(x, y, s=s.get("size", 14), color=col, marker=s.get("marker") or "o", edgecolors="#1b1b1b",
+                        linewidths=0.4, alpha=alpha, label=lab, zorder=3)
+        parts.append(("points", "scatter", sc))
+    else:
+        o = np.argsort(x) if s.get("sort", True) else np.arange(n)
+        if err is not None and s.get("band"):
+            band = ax.fill_between(x[o], (y - err)[o], (y + err)[o], color=col, alpha=0.18, lw=0, zorder=1.5)
+            parts.append(("band", "collection", band))
+            err = None
+        ln, = ax.plot(x[o], y[o], color=col, lw=s.get("lw", 1.2), alpha=alpha, marker=s.get("marker") or None,
+                      ms=s.get("ms", 3.2), mec="#1b1b1b", mew=0.4, ls=s.get("ls", "-"), label=lab, zorder=3)
+        parts.append(("line", "line", ln))
+    if err is not None and typ != "area":
+        if typ == "bar":
+            cap = slot[0] * 0.18 if slot else 0.1
+        else:
+            cap = 0.15 * (np.min(np.diff(np.unique(x))) if len(np.unique(x)) > 1 else 1.0)
+        segs = []
+        for xi, yi, ei in zip(ex, y, err):
+            if ei == ei and ei > 0:
+                seg = [[(xi, yi - ei), (xi, yi + ei)], [(xi - cap, yi - ei), (xi + cap, yi - ei)],
+                       [(xi - cap, yi + ei), (xi + cap, yi + ei)]]
+                segs += [[(q[1], q[0]) for q in v] for v in seg] if h else seg
+        lc = LineCollection(segs, colors="#1b1b1b", linewidths=0.6, zorder=4)
+        ax.add_collection(lc, autolim=False)
+        parts.append(("err", "collection", lc))
+    for nm, kind, a in parts:
+        a._tw_key = "%s/series/%s/%s" % (ak, sid, nm)
+        a._tw_kind = kind
+    return [a for nm, _, a in parts if lab and nm in ("bar", "area", "points", "line")] if s.get("legend", True) else []
+
+
+def _rescale(ax):
+    """Fit the view to the data again, on the axes the script left to autoscale."""
+    if not (ax.get_autoscalex_on() or ax.get_autoscaley_on()):
+        return
+    ax.relim()
+    for c in ax.collections:                          # relim leaves collections out
+        if isinstance(c, PathCollection) and c.get_offset_transform() is ax.transData and len(c.get_offsets()):
+            ax.update_datalim(c.get_offsets())
+        elif isinstance(c, PolyCollection) and c.get_transform() is ax.transData:
+            for p in c.get_paths():
+                if len(p.vertices):
+                    ax.update_datalim(p.vertices)
+    ax.autoscale_view()
+
+
+def _legend_with(ax, handles):
+    """The chart's legend with the added series appended (a new one if the script drew none)."""
+    lg = ax.get_legend()
+    if lg is None:
+        ax.legend(handles=handles)
+        return
+    old = list(getattr(lg, "legend_handles", None) or getattr(lg, "legendHandles", []))
+    labels = [t.get_text() for t in lg.get_texts()]
+    kw = dict(loc=lg._loc, frameon=lg.get_frame_on(), title=lg.get_title().get_text() or None)
+    if getattr(lg, "_bbox_to_anchor", None) is not None:
+        kw["bbox_to_anchor"] = lg._bbox_to_anchor
+    if lg.get_texts():
+        kw["fontsize"] = lg.get_texts()[0].get_fontsize()
+    try:
+        ax.legend(old + handles, labels + [h.get_label() for h in handles], ncols=getattr(lg, "_ncols", 1), **kw)
+    except TypeError:                                  # matplotlib before 3.6
+        ax.legend(old + handles, labels + [h.get_label() for h in handles], ncol=getattr(lg, "_ncols", 1), **kw)
+
+
+def _data_layer(ax, ak, tw):
+    """tw['data'] {sid: {x, y, err, z}} replaces plotted values; tw['series'] [{id, type, x, y, err, ...}] adds
+    series (type bar, line, scatter, area)."""
+    found = {sid: (kind, a) for sid, kind, a in _script_series(ax)}
+    for sid, d in (tw.get("data") or {}).items():
+        if sid in found and isinstance(d, dict):
+            try:
+                _set_series(ax, found[sid][0], found[sid][1], d)
+            except (TypeError, ValueError, IndexError) as e:
+                print("tweaks: data of %s %s not applied: %s" % (ak, sid, e))
+    added = [s for s in tw.get("series") or [] if isinstance(s, dict)]
+    slots = _bar_slots(ax, added)
+    handles = []
+    for s in added:
+        try:
+            handles += _add_series(ax, ak, s, slots.get(id(s)))
+        except (TypeError, ValueError, IndexError) as e:
+            print("tweaks: series %s of %s not drawn: %s" % (s.get("id"), ak, e))
+    _rescale(ax)
+    if handles:
+        _legend_with(ax, handles)
+
+
 def _border_of(t):
     p = t.get_bbox_patch() if isinstance(t, Text) else None
     return bool(p is not None and p.get_visible() and p.get_linewidth() > 0 and to_rgba(p.get_edgecolor())[3] > 0)
@@ -819,6 +1222,10 @@ def apply(fig, here, stem, rerun_args=None):
     arguments that re-render only this figure (default: those of the current run)."""
     path = os.path.join(here, stem + ".tweaks.json")
     tweaks = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+    for ax, ak in _axkeys(fig).items():            # plotted values replaced and series added in the editor
+        tw = tweaks.get(ak + "/axes") or {}
+        if tw.get("data") or tw.get("series"):
+            _data_layer(ax, ak, tw)
     _house_defaults(fig)                           # bold legends, no masking text backgrounds
     for k, v in sorted(tweaks.items()):            # texts and shapes inserted in the editor
         if k.startswith("fig/added/") and isinstance(v, dict) and v.get("add"):
@@ -888,6 +1295,18 @@ def apply(fig, here, stem, rerun_args=None):
             rec["ls"] = _ls_name(ls[0] if isinstance(ls, list) and ls else ls)
         if it["kind"] in ("image", "collection", "scatter") and _is_mapped(a):
             rec.update(cmap=a.get_cmap().name, clim=[float(v) for v in a.get_clim()])
+        if it["kind"] == "axes" and getattr(a, "_colorbar", None) is None:
+            series = []                            # the plotted data, for the editor's data table
+            for sid, kind, art in _script_series(a):
+                t = _series_table(a, kind, art)
+                if len(t["rows"]) > DATA_ROWS:
+                    t.update(rows=[], n=len(t["rows"]), too_long=True)
+                series.append(dict(sid=sid, kind=kind, **t))
+            if series:
+                rec["series"] = series
+            rec["xcat"] = _categories(a.xaxis) is not None
+        if it.get("added_series"):
+            rec["added_series"] = True
         if it["kind"] == "axes" and getattr(a, "_colorbar", None) is not None:
             parent = getattr(a._colorbar.mappable, "axes", None)
             if parent is not None and parent in axk:

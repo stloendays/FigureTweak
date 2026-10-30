@@ -76,6 +76,77 @@ def make_script(tid, stem, data_name, style_dir, width_mm, height_mm, title, val
             + common + "\n# ---- draw ----\n" + _sections(tid)[1])
 
 
+def _assigns(code):
+    out = {}
+    for node in ast.parse(code).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        t, v = node.targets[0], ast.literal_eval(node.value)
+        if isinstance(t, ast.Name):
+            out[t.id] = v
+        elif isinstance(t, ast.Tuple):
+            out.update({e.id: x for e, x in zip(t.elts, v)})
+    return out
+
+
+def script_info(script):
+    """What a script made from a template holds: {template, figure: {STEM, DATA, ...}, values}; None for others."""
+    try:
+        src = open(script, encoding="utf-8").read()
+    except OSError:
+        return None
+    m = re.search(r'chart template "([a-z0-9_]+)"', src)
+    if not m or "# ---- chart settings ----\n" not in src or "# ---- shared ----\n" not in src:
+        return None
+    fig = src.split("# ---- figure ----\n", 1)[1].split("# ---- chart settings ----\n", 1)[0]
+    sets = src.split("# ---- chart settings ----\n", 1)[1].split("# ---- shared ----\n", 1)[0]
+    return dict(template=m.group(1), figure=_assigns(fig), values=_assigns(sets))
+
+
+def update_script(script, tid, values, figure=None):
+    """Write new chart settings into a template script, keeping its drawing code; with another template, rebuild the
+    script from that template around the same figure block (STEM, DATA, STYLE_DIR stay)."""
+    info = script_info(script)
+    fg = dict(info["figure"], **{k: v for k, v in (figure or {}).items() if k in ("WIDTH_MM", "HEIGHT_MM", "TITLE")})
+    vals = dict(defaults(tid), **{k: v for k, v in values.items() if k in defaults(tid)})
+    if tid != info["template"]:
+        src = make_script(tid, fg["STEM"], fg["DATA"], fg["STYLE_DIR"], fg["WIDTH_MM"], fg["HEIGHT_MM"],
+                          fg.get("TITLE", ""), vals)
+    else:
+        src = open(script, encoding="utf-8").read()
+        head, rest = src.split("# ---- chart settings ----\n", 1)
+        rest = rest.split("# ---- shared ----\n", 1)[1]
+        head = re.sub(r"(?m)^WIDTH_MM, HEIGHT_MM = .*$", "WIDTH_MM, HEIGHT_MM = %s, %s"
+                      % (_num(fg["WIDTH_MM"]), _num(fg["HEIGHT_MM"])), head)
+        head = re.sub(r"(?m)^TITLE = .*$", lambda m: "TITLE = %r" % fg.get("TITLE", ""), head)
+        src = head + "# ---- chart settings ----\n" + _settings_block(tid, vals) + "\n# ---- shared ----\n" + rest
+    open(script, "w", encoding="utf-8").write(src)
+
+
+def data_path(script):
+    info = script_info(script)
+    return os.path.join(os.path.dirname(script), info["figure"]["DATA"]) if info else None
+
+
+DATA_EXT = (".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".dat")
+
+
+def data_files(script):
+    """Data files a figure script names in quotes and that exist (relative to the script or its folder's parent)."""
+    try:
+        src = open(script, encoding="utf-8").read()
+    except OSError:
+        return []
+    out, here = [], os.path.dirname(script)
+    for name in dict.fromkeys(re.findall(r"""["']([^"'\n]+?\.(?:csv|tsv|txt|xlsx|xls|json|dat))["']""", src, re.I)):
+        for base in (here, os.path.dirname(here)):
+            p = os.path.normpath(os.path.join(base, name))
+            if os.path.isfile(p) and not p.endswith((".tweaks.json", ".tweak_keys.json")):
+                out.append(p)
+                break
+    return out
+
+
 def _num(v):
     v = float(v)
     return repr(int(v)) if v == int(v) else repr(v)

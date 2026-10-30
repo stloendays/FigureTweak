@@ -1,0 +1,19 @@
+catalyst,metric,score
+Cat A,Activity,7.2
+Cat A,Selectivity,7.1
+Cat A,Stability,4.8
+Cat A,Cost,7.1
+Cat A,Scalability,9.4
+Cat A,Safety,4.2
+Cat B,Activity,7
+Cat B,Selectivity,5.7
+Cat B,Stability,4.3
+Cat B,Cost,9.1
+Cat B,Scalability,6.9
+Cat B,Safety,3.3
+Cat C,Activity,4.6
+Cat C,Selectivity,5.5
+Cat C,Stability,4.2
+Cat C,Cost,5.7
+Cat C,Scalability,4.4
+Cat C,Safety,5.7

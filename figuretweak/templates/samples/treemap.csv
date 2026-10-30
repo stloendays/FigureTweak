@@ -1,0 +1,10 @@
+item,stage,cost
+Reformer,Synthesis,38
+Compressor,Synthesis,24
+Reactor,Synthesis,21
+Separator,Separation,14
+Absorber,Separation,11
+Distillation,Separation,9
+Storage,Storage,8
+Utilities,Utilities,7
+Control,Utilities,3

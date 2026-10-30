@@ -28,6 +28,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKIP = (os.sep + ".git" + os.sep, os.sep + "node_modules" + os.sep)
+try:
+    import chart_templates as ct                    # beside this file in FigureTweak; absent from older project copies
+except ImportError:
+    ct = None
 
 
 def stem_of(keys_path):
@@ -227,6 +231,39 @@ def render_overlay(f):
     return ("OK" if all(not l.startswith("FAILED") for l in logs) else "ERROR") + "\n" + "\n".join(logs)
 
 
+def source_info(f):
+    """The data behind a figure: a template figure's own table and settings, else the data files its script names."""
+    script = f.meta().get("script") or ""
+    out = dict(template=None, files=[])
+    if ct is None or not os.path.isfile(script):
+        return out
+    info = ct.script_info(script)
+    if info:
+        cat = ct.catalog()
+        for t in cat["templates"]:
+            t["defaults"] = ct.defaults(t["id"])
+        tab = ct.parse_table(ct.read_data_file(ct.data_path(script)))
+        out.update(template=dict(info, name=ct.template(info["template"])["name"]), table=tab, catalog=cat,
+                   data_file=ct.data_path(script))
+    else:
+        out["files"] = ct.data_files(script)
+    return out
+
+
+def save_source(f, req):
+    """Write a template figure's table and settings (or switch it to another template), then re-render it."""
+    script = f.meta().get("script") or ""
+    info = ct.script_info(script) if ct and os.path.isfile(script) else None
+    if not info:
+        return "ERROR\nthis figure was not made from a chart template"
+    if req.get("table"):
+        ct.write_csv(dict(columns=req["table"]["columns"], rows=req["table"]["rows"]), ct.data_path(script))
+    if req.get("template") or req.get("values") or req.get("figure"):
+        ct.update_script(script, req.get("template") or info["template"], req.get("values") or info["values"],
+                         req.get("figure"))
+    return f.render()
+
+
 ROLES = [("letter", "分图字母"), ("title", "分图标题"), ("axislabel", "坐标轴标题"), ("ticks", "刻度/类别标签"),
          ("legend", "图例文字"), ("text", "图中标注")]
 
@@ -300,6 +337,8 @@ def make_handler(st):
                 self.send(open(f.keys_path, encoding="utf-8").read())
             elif self.path.startswith("/tweaks"):
                 self.send(json.dumps(f.tweaks(), ensure_ascii=False))
+            elif self.path.startswith("/source"):
+                self.send(json.dumps(source_info(f), ensure_ascii=False))
             elif self.path.startswith("/consistency"):
                 self.send(json.dumps(consistency(root_of(st, f)), ensure_ascii=False))
             else:
@@ -359,6 +398,18 @@ def make_handler(st):
                         logs = list(ex.map(lambda fg: "%s: %s" % (fg.id, fg.render().splitlines()[0]), figs))
                     return self.send(json.dumps({"log": ("ERROR\n" if any("ERROR" in x for x in logs) else "OK\n")
                                                  + "\n".join(logs)}, ensure_ascii=False))
+                if self.path == "/source_save":
+                    try:
+                        log = save_source(st["fig"], req)
+                    except Exception as e:                  # noqa: BLE001 -- shown to the author as is
+                        log = "ERROR\n%s" % e
+                    return self.send(json.dumps({"log": log}, ensure_ascii=False))
+                if self.path == "/open_path":             # a data file the figure's script names, in its own program
+                    src = source_info(st["fig"])
+                    ok = bool(req.get("path")) and req["path"] in src["files"] + [src.get("data_file")]
+                    if ok and hasattr(os, "startfile"):
+                        os.startfile(req["path"])
+                    return self.send(json.dumps({"ok": bool(ok)}))
                 f = st["fig"]
                 t = f.tweaks()
                 frag = req.pop("__overlay_svg", None)

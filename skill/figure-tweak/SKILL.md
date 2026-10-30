@@ -71,10 +71,13 @@ A paper whose `tweak.py` predates 1.1 shows none of this; re-run 接入新论文
 
 ## New figures from chart templates (FigureTweak 1.2)
 
-The start page's 「新建图表」 (on a paper's page) makes a new editable figure from one of 16 chart templates:
-bar + error bars, grouped bar, stacked bar, waterfall, ranked lollipop, slope (rank change), dumbbell, box + points,
-violin, histogram, scatter + linear fit, parity, multi-line, heatmap, forest (estimate + interval), reaction energy
-profile. The user filters by purpose, loads a CSV/TSV or pastes from Excel, maps columns (guessed by type), previews
+The start page's 「新建图表」 (on a paper's page) makes a new editable figure from one of 43 chart templates
+(1.3; the gallery follows hiplot.cn's): bar + error bars, grouped / stacked bar, waterfall, lollipop, slope, bump
+(multi-period ranks), dumbbell, pyramid (back to back), diverging bar, range bar, Pareto, polar bar / rose, dot
+matrix; box + points, violin, raincloud, ridgeline, density, histogram, Q-Q; scatter + fit, parity, bubble, contour,
+volcano; correlation heatmap, PCA (loadings, group ellipses), parallel coordinates, radar; area / streamgraph,
+dual y axis, multi-line, heatmap; donut / pie, treemap, waffle, Sankey; Venn (2-3 sets), UpSet; forest; ternary,
+reaction energy profile. The user filters by purpose, loads a CSV/TSV or pastes from Excel, maps columns (guessed by type), previews
 with the paper's own `style.py`, names the figure (and optionally its manuscript number), and it opens in the editor.
 
 What it writes, in a new folder `<figures home>/<stem lower>/` beside the paper's other figure folders:
@@ -93,6 +96,32 @@ from then on: change data, settings or drawing code and rerun it.
   data exactly as the start page would, fails on any template that does not render or is not editable, and writes
   the thumbnails.
 - The repository is public: sample data must be synthetic, never numbers from an unpublished paper.
+
+
+## Data, added series and template sources (FigureTweak 1.3, tweak.py `TWEAK_VERSION = "1.3"`)
+
+The editor's 「数据」 button (or a chart's 「数据与系列」 panel) opens the data dialog:
+
+- **Plotted values of any chart.** `tweak.apply` lists each chart's series in the keys file (`ids[<axes>].series`:
+  `sid` `bars/i`, `errorbar/i`, `line/i`, `scatter/i`, `image/i`; columns, rows, which columns may change). Edits are
+  stored on the chart, `"<axes key>": {"data": {"bars/0": {"y": [...]}, "line/1": {"x": [...], "y": [...]}}}`, and
+  applied before the figure is keyed; the view refits where the script left autoscaling on. The script and its data
+  files are not touched. Values the script computed from the data (fit lines, numbers written in cells, bar-top
+  labels) do not follow; for those change the source.
+- **Added series.** `"series": [{"id": "s1", "type": "bar"|"line"|"scatter"|"area", "x": [...], "y": [...],
+  "err": [...], "label", "color", "dodge", "band", "marker", "legend"}]` on the chart's entry. x may be category or
+  tick-label names. Added bars with `dodge` share the width of the script's bar group: the script's bars (and their
+  error bars) move aside; on a horizontal bar chart they lie down too. Labelled series are appended to the chart's
+  legend. Their parts are keyed `<axes>/series/<id>/<part>` (bar, err, line, band, points, area) and edit like any
+  other artist.
+- **Template figures** (scripts with `# ---- chart settings ----` and `chart template "<id>"` in the docstring): the
+  dialog edits `<stem>_data.csv` (rows, columns, names) and the settings block (column mapping, options, size, title),
+  or switches the figure to another template (rewrites the drawing code; hand edits keyed to the old chart may orphan).
+  `chart_templates.script_info / update_script` do the rewriting.
+- **Other figures** list the data files their script names in quotes; 「打开」 opens one in its program and
+  「按现在的数据重新出图」 reruns the script.
+
+A paper whose `tweak.py` predates 1.3 shows no plotted data: re-run 接入新论文 on its figures folder.
 
 ## figure_labels.json
 
