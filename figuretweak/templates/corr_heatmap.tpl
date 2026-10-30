@@ -31,7 +31,7 @@ if LOWER_ONLY:
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
 pos = ax.get_position()
-cax = pg.fig.add_axes([pos.x1 + 2.0 / WIDTH_MM, pos.y0, 2.2 / WIDTH_MM, pos.height])
+cax = pg.fig.add_axes([pos.x1 + 2.0 / PAGE_W, pos.y0, 2.2 / PAGE_W, pos.height])
 cb = pg.fig.colorbar(im, cax=cax)
 cb.outline.set_linewidth(0.6)
 cb.set_label(COLORBAR_LABEL)

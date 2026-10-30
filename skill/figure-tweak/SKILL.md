@@ -123,6 +123,22 @@ The editor's 「数据」 button (or a chart's 「数据与系列」 panel) open
 
 A paper whose `tweak.py` predates 1.3 shows no plotted data: re-run 接入新论文 on its figures folder.
 
+## Inserted charts, colour scope, grid (FigureTweak 1.4, tweak.py `TWEAK_VERSION = "1.4"`)
+
+- **Insert a chart into an existing figure**: 插入 → 图表. The editor writes `<stem>_charts/<id>.py` (a chart template
+  script) and `<id>.csv` beside the figure and records `"fig/added/<id>": {"add": {"type": "chart", "script": ...,
+  "x_mm", "y_mm", "w_mm", "h_mm"}}`. `tweak.apply` runs that script first, with `FIG` and `BOX` given (templates
+  draw through `box_ax`, `PAGE_W`/`PAGE_H` and offsets `OX`/`OY` in `common.tpl`), so its axes are keyed
+  `fig/added/<id>/ax<n>/...` wherever the box moves and edit like any chart. Endpoints `/chart_insert`,
+  `/chart_source`, `/chart_save` (data, settings, title, chart type).
+- **Colour scope** for lines, bands, points, patches: 只改这一个 (the item), 本图表同色一起改 (the mapping goes on the
+  chart's `axes` entry: line, band, markers and legend key change together; the default), 全图同色一起改 (`fig/figure`).
+- **Several selected**: colour, line width, opacity, line style for all of them.
+- **Grid**: gridlines carry ids `<axes gid>_gx<n>` / `_gy<n>`, so switching them off previews at once; `fig/figure`
+  `grid` sets every chart that has no own setting, and 「把这几项用到全稿所有图」 includes it.
+- A paper whose tweak.py is older than the editor's gets a note with an upgrade button on the canvas panel
+  (`/tweak_home`; the button opens the hub's onboarding for that folder, which re-renders with the pixel check).
+
 ## figure_labels.json
 
 At the figures root, maps figures to the manuscript's numbers; its order is the order the editor lists them in.

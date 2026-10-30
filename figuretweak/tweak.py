@@ -9,7 +9,7 @@ Keys are built from the axes (position in mm), the kind and, for text, the strin
 draw and before anything changes, so they stay valid after an adjustment.
 
 Adjustable, per kind (lengths in mm; size, scale and lw are factors; colours are hex):
-    figure      background, colors {old: new} over the whole figure; frame, tickdir for every chart and
+    figure      background, colors {old: new} over the whole figure; frame, tickdir, grid for every chart and
                 textbox ("none": no border on boxed texts, and a white box left without a border goes too) for every
                 text, unless the item sets its own
     axes        dx_mm, dy_mm, dw_mm, dh_mm (top-left fixed), background, background_alpha, lw (frame and ticks),
@@ -38,6 +38,8 @@ Adjustable, per kind (lengths in mm; size, scale and lw are factors; colours are
                   line     as arrow, head "-"
                   bracket  x0_mm, x1_mm, y_mm (the bar), h_mm (the legs), text ("*", "n.s." ...), size_pt, lw, color
                   box      x_mm, y_mm (bottom-left), w_mm, h_mm, radius_mm, fill, lw, ls, color
+                  chart    x_mm, y_mm, w_mm, h_mm, script (a chart template's drawing script beside the figure,
+                           which draws into that box); its charts are keyed "<insert key>/ax<n>/..."
     scatter     scale (marker area), lw, alpha, colors, visible; positions are data and never move
     line        lw, alpha, colors, visible
     patch       bars, boxes, shapes: lw, alpha, colors, visible
@@ -66,7 +68,7 @@ from matplotlib.ticker import (AutoMinorLocator, FixedLocator, Formatter, FuncFo
                                NullFormatter, NullLocator)
 from matplotlib.transforms import Affine2D, Bbox, ScaledTranslation, blended_transform_factory
 
-TWEAK_VERSION = "1.3"                                # onboarding replaces an older copy in a project
+TWEAK_VERSION = "1.4"                                # onboarding replaces an older copy in a project
 MM = 1 / 25.4
 PT_PER_MM = 72 * MM
 
@@ -171,6 +173,9 @@ def _axkeys(fig):
     W, H = fig.get_size_inches() / MM
     seen, out = Counter(), {}
     for ax in fig.axes:
+        if getattr(ax, "_tw_inset", None):            # a chart inserted in the editor: keyed by its insert
+            out[ax] = ax._tw_inset
+            continue
         x0, y0, w, h = ax.get_position(original=True).bounds
         k = "ax@%.0f,%.0f,%.0f,%.0f" % (x0 * W, y0 * H, w * W, h * H)
         seen[k] += 1
@@ -300,7 +305,7 @@ def _role(it):
     if it.get("added"):
         return "added"
     if it["kind"] == "text":
-        if it["key"].startswith("fig/"):
+        if it["key"].startswith("fig/text/"):
             s = it["artist"].get_text().strip()
             return "letter" if len(s) == 1 and s.isalpha() else "title"
         return "text"
@@ -350,6 +355,25 @@ def _make_added(fig, key, v):
     if not hasattr(fig, "_tw_added"):
         fig._tw_added = {}
     fig._tw_added[key] = (typ, parts)
+
+
+def _draw_chart(fig, key, v, here):
+    """A chart inserted in the editor: its own drawing script (a chart template, written beside the figure by the
+    editor) draws into the box add.x_mm, y_mm, w_mm, h_mm (mm from the figure's bottom-left corner)."""
+    a = v["add"]
+    src = os.path.join(here, a["script"])
+    before = set(fig.axes)
+    box = (a["x_mm"] + v.get("dx_mm", 0.0), a["y_mm"] + v.get("dy_mm", 0.0), a["w_mm"], a["h_mm"])
+    ns = dict(__file__=src, __name__="tw_chart", FIG=fig, BOX=box)
+    try:
+        exec(compile(open(src, encoding="utf-8").read(), src, "exec"), ns)
+    except (Exception, SystemExit) as e:              # noqa: BLE001 -- one bad insert must not stop the figure
+        print("tweaks: inserted chart %s not drawn: %s" % (key, e))
+    for j, ax in enumerate(x for x in fig.axes if x not in before):
+        ax._tw_inset = "%s/ax%d" % (key, j)
+    if not hasattr(fig, "_tw_charts"):
+        fig._tw_charts = set()
+    fig._tw_charts.add(key)
 
 
 # ---- line styles, markers and colour maps --------------------------------------------------------------------------
@@ -1223,13 +1247,16 @@ def apply(fig, here, stem, rerun_args=None):
     arguments that re-render only this figure (default: those of the current run)."""
     path = os.path.join(here, stem + ".tweaks.json")
     tweaks = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+    for k, v in sorted(tweaks.items()):            # charts inserted in the editor, first: they are edited like the rest
+        if k.startswith("fig/added/") and isinstance(v, dict) and (v.get("add") or {}).get("type") == "chart"                 and v.get("visible", True) is not False:
+            _draw_chart(fig, k, v, here)
     for ax, ak in _axkeys(fig).items():            # plotted values replaced and series added in the editor
         tw = tweaks.get(ak + "/axes") or {}
         if tw.get("data") or tw.get("series"):
             _data_layer(ax, ak, tw)
     _house_defaults(fig)                           # bold legends, no masking text backgrounds
     for k, v in sorted(tweaks.items()):            # texts and shapes inserted in the editor
-        if k.startswith("fig/added/") and isinstance(v, dict) and v.get("add"):
+        if k.startswith("fig/added/") and isinstance(v, dict) and v.get("add") and v["add"].get("type") != "chart":
             _make_added(fig, k, v)
     for ax, ak in _axkeys(fig).items():            # axis ranges, scales and ticks first: the keys see the new ticks
         tw = tweaks.get(ak + "/axes") or {}
@@ -1296,6 +1323,16 @@ def apply(fig, here, stem, rerun_args=None):
             rec["ls"] = _ls_name(ls[0] if isinstance(ls, list) and ls else ls)
         if it["kind"] in ("image", "collection", "scatter") and _is_mapped(a):
             rec.update(cmap=a.get_cmap().name, clim=[float(v) for v in a.get_clim()])
+        if it["kind"] == "axes":
+            x0, y0, w, h = a.get_position(original=True).bounds
+            Wm, Hm = fig.get_size_inches() / MM
+            rec["rect_mm"] = [round(x0 * Wm, 2), round(y0 * Hm, 2), round(w * Wm, 2), round(h * Hm, 2)]
+            if getattr(a, "_tw_inset", None):
+                rec["inset"] = a._tw_inset.rsplit("/", 1)[0]
+            if _is_chart(a):                       # gridlines, so the editor can preview switching them off
+                for n, axis in (("x", a.xaxis), ("y", a.yaxis)):
+                    for j, gl in enumerate(axis.get_gridlines()):
+                        gl.set_gid("%s_g%s%d" % (gid, n, j))
         if it["kind"] == "axes" and getattr(a, "_colorbar", None) is None:
             series = []                            # the plotted data, for the editor's data table
             for sid, kind, art in _script_series(a):
@@ -1339,6 +1376,8 @@ def apply(fig, here, stem, rerun_args=None):
                 _set_frame(it["artist"], fw["frame"])
             if fw.get("tickdir") in ("in", "out", "inout") and "tickdir" not in own and _is_chart(it["artist"]):
                 it["artist"].tick_params(axis="both", which="both", direction=fw["tickdir"])
+            if fw.get("grid") in ("none", "x", "y", "both") and "grid" not in own and _is_chart(it["artist"]):
+                _set_grid(it["artist"], fw["grid"])
         elif it["kind"] in ("text", "axislabel") and fw.get("textbox") == "none" and "border" not in own:
             _set_border(it["artist"], False)
             _drop_masking_box(it["artist"])        # a borderless white box is the masking background the defaults remove
@@ -1372,6 +1411,7 @@ def apply(fig, here, stem, rerun_args=None):
     for tok, r in rows.items():
         text = text.replace('"%s"' % tok, r, 1)
     open(os.path.join(here, stem + ".tweak_keys.json"), "w", encoding="utf-8").write(text)
+    used |= getattr(fig, "_tw_charts", set())
     stale = sorted(set(tweaks) - used)
     if stale:
         print("tweaks: %d entr%s match no artist any more: %s" % (len(stale), "y" if len(stale) == 1 else "ies",

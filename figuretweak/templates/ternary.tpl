@@ -40,7 +40,7 @@ ax.set_ylim(-0.13, H3 + 0.1)
 ax.axis("off")
 if VALUE:
     pos = ax.get_position()
-    cax = pg.fig.add_axes([pos.x1 + 1.0 / WIDTH_MM, pos.y0 + pos.height * 0.15, 2.2 / WIDTH_MM, pos.height * 0.7])
+    cax = pg.fig.add_axes([pos.x1 + 1.0 / PAGE_W, pos.y0 + pos.height * 0.15, 2.2 / PAGE_W, pos.height * 0.7])
     cb = pg.fig.colorbar(sc, cax=cax)
     cb.outline.set_linewidth(0.6)
     cb.set_label(COLORBAR_LABEL)

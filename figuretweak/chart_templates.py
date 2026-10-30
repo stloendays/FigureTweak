@@ -123,6 +123,18 @@ def update_script(script, tid, values, figure=None):
     open(script, "w", encoding="utf-8").write(src)
 
 
+def insert_chart(fig_dir, stem, key_id, tid, table, values, title):
+    """Write the drawing script and table of a chart inserted into an existing figure, in <stem>_charts/ beside it;
+    returns the script's path relative to the figure's folder (what tweaks.json records)."""
+    d = os.path.join(fig_dir, stem + "_charts")
+    os.makedirs(d, exist_ok=True)
+    write_csv(table, os.path.join(d, key_id + ".csv"))
+    vals = dict(defaults(tid), **{k: v for k, v in values.items() if k in defaults(tid)})
+    open(os.path.join(d, key_id + ".py"), "w", encoding="utf-8").write(
+        make_script(tid, key_id, key_id + ".csv", "..", 60, 45, title, vals))
+    return "%s_charts/%s.py" % (stem, key_id)
+
+
 def data_path(script):
     info = script_info(script)
     return os.path.join(os.path.dirname(script), info["figure"]["DATA"]) if info else None

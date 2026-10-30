@@ -25,13 +25,13 @@ ax.grid(color="#e2e2e2", lw=0.4)
 ax.set_axisbelow(True)
 pos = ax.get_position()
 if COLOR:
-    cax = pg.fig.add_axes([pos.x1 + 2.0 / WIDTH_MM, pos.y0 + pos.height * 0.55, 2.2 / WIDTH_MM, pos.height * 0.45])
+    cax = pg.fig.add_axes([pos.x1 + 2.0 / PAGE_W, pos.y0 + pos.height * 0.55, 2.2 / PAGE_W, pos.height * 0.45])
     cb = pg.fig.colorbar(sc, cax=cax)
     cb.outline.set_linewidth(0.6)
     cb.set_label(COLORBAR_LABEL)
 ref = [float("%.2g" % (zmax * f)) for f in (0.25, 0.5, 1.0)]
 pg.fig.legend(handles=[Line2D([], [], ls="none", marker="o", markersize=np.sqrt(v / zmax * MAX_AREA), mfc="none",
                               mec=INK, mew=0.6, label="%g" % v) for v in ref],
-              title=SIZE_TITLE, loc="lower left", bbox_to_anchor=(pos.x1 + 0.5 / WIDTH_MM, pos.y0),
+              title=SIZE_TITLE, loc="lower left", bbox_to_anchor=(pos.x1 + 0.5 / PAGE_W, pos.y0),
               labelspacing=0.9, handletextpad=0.8)
 finish(ax)

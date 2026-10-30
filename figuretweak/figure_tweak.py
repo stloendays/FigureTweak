@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -231,6 +232,65 @@ def render_overlay(f):
     return ("OK" if all(not l.startswith("FAILED") for l in logs) else "ERROR") + "\n" + "\n".join(logs)
 
 
+def catalog():
+    cat = ct.catalog()
+    for t in cat["templates"]:
+        t["defaults"] = ct.defaults(t["id"])
+    return cat
+
+
+def chart_source(f, key):
+    """An inserted chart's template, settings and table."""
+    a = (f.tweaks().get(key) or {}).get("add") or {}
+    script = os.path.join(f.dir, a.get("script", ""))
+    info = ct.script_info(script) if ct and a.get("script") and os.path.isfile(script) else None
+    if not info:
+        return dict(template=None)
+    return dict(template=dict(info, name=ct.template(info["template"])["name"]), catalog=catalog(),
+                table=ct.parse_table(ct.read_data_file(ct.data_path(script))), data_file=ct.data_path(script))
+
+
+def insert_chart(f, req):
+    """A new chart from a template, drawn into this figure's box add.x_mm/y_mm/w_mm/h_mm (see tweak._draw_chart)."""
+    kid = "chart_%d" % int(time.time() * 1000)
+    rel = ct.insert_chart(f.dir, f.stem, kid, req["template"], req["table"], req.get("values") or {},
+                          req.get("title", ""))
+    t = f.tweaks()
+    b = req["box"]
+    t["fig/added/" + kid] = {"add": dict(type="chart", script=rel, **{k: round(float(b[k]), 2) for k in
+                                                                    ("x_mm", "y_mm", "w_mm", "h_mm")})}
+    f.write_tweaks(t)
+    return f.render()
+
+
+def save_chart(f, req):
+    a = (f.tweaks().get(req["key"]) or {}).get("add") or {}
+    script = os.path.join(f.dir, a.get("script", ""))
+    info = ct.script_info(script) if a.get("script") and os.path.isfile(script) else None
+    if not info:
+        return "ERROR\nno inserted chart %s" % req["key"]
+    if req.get("table"):
+        ct.write_csv(dict(columns=req["table"]["columns"], rows=req["table"]["rows"]), ct.data_path(script))
+    if req.get("template") or req.get("values") or "title" in req:
+        ct.update_script(script, req.get("template") or info["template"], req.get("values") or info["values"],
+                         {"TITLE": req["title"]} if "title" in req else None)
+    return f.render()
+
+
+def tweak_home(f):
+    """The folder holding the tweak.py this figure renders with, its version and the version bundled here."""
+    def version(p):
+        m = re.search(r"""^TWEAK_VERSION\s*=\s*["']([\d.]+)""", open(p, encoding="utf-8").read(), re.M)
+        return m.group(1) if m else "1.0"
+    d = os.path.dirname(f.meta().get("script") or "")
+    for _ in range(5):
+        p = os.path.join(d, "tweak.py")
+        if os.path.isfile(p) and "def apply(fig, here, stem" in open(p, encoding="utf-8").read():
+            return dict(folder=d, version=version(p), latest=version(os.path.join(HERE, "tweak.py")))
+        d = os.path.dirname(d)
+    return dict(folder=None, version=None, latest=version(os.path.join(HERE, "tweak.py")))
+
+
 def source_info(f):
     """The data behind a figure: a template figure's own table and settings, else the data files its script names."""
     script = f.meta().get("script") or ""
@@ -339,6 +399,19 @@ def make_handler(st):
                 self.send(json.dumps(f.tweaks(), ensure_ascii=False))
             elif self.path.startswith("/source"):
                 self.send(json.dumps(source_info(f), ensure_ascii=False))
+            elif self.path.startswith("/tweak_home"):
+                self.send(json.dumps(tweak_home(f), ensure_ascii=False))
+            elif self.path.startswith("/templates") and ct:
+                self.send(json.dumps(catalog(), ensure_ascii=False))
+            elif self.path.startswith("/template_thumb") and ct:
+                p = os.path.join(ct.TPL, "thumbs", os.path.basename(self.path.split("id=", 1)[-1]) + ".png")
+                self.send(open(p, "rb").read() if os.path.exists(p) else b"", "image/png", 200 if os.path.exists(p) else 404)
+            elif self.path.startswith("/template_sample") and ct:
+                self.send(json.dumps(ct.parse_table(ct.sample(os.path.basename(self.path.split("id=", 1)[-1]))),
+                                     ensure_ascii=False))
+            elif self.path.startswith("/chart_source"):
+                from urllib.parse import unquote
+                self.send(json.dumps(chart_source(f, unquote(self.path.split("key=", 1)[-1])), ensure_ascii=False))
             elif self.path.startswith("/consistency"):
                 self.send(json.dumps(consistency(root_of(st, f)), ensure_ascii=False))
             else:
@@ -388,7 +461,7 @@ def make_handler(st):
                     for fg in figs:
                         t = fg.tweaks()
                         e = t.setdefault("fig/figure", {})
-                        for k in ("frame", "textbox", "tickdir"):
+                        for k in ("frame", "textbox", "tickdir", "grid"):
                             if req.get(k):
                                 e[k] = req[k]
                             else:
@@ -398,6 +471,12 @@ def make_handler(st):
                         logs = list(ex.map(lambda fg: "%s: %s" % (fg.id, fg.render().splitlines()[0]), figs))
                     return self.send(json.dumps({"log": ("ERROR\n" if any("ERROR" in x for x in logs) else "OK\n")
                                                  + "\n".join(logs)}, ensure_ascii=False))
+                if self.path in ("/chart_insert", "/chart_save"):
+                    try:
+                        log = (insert_chart if self.path == "/chart_insert" else save_chart)(st["fig"], req)
+                    except Exception as e:                  # noqa: BLE001 -- shown to the author as is
+                        log = "ERROR\n%s" % e
+                    return self.send(json.dumps({"log": log}, ensure_ascii=False))
                 if self.path == "/source_save":
                     try:
                         log = save_source(st["fig"], req)

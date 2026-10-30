@@ -127,6 +127,7 @@
   <button data-ins="line" title="直线或引线">线 —</button>
   <button data-ins="bracket" title="显著性括号">括号 ⊓</button>
   <button data-ins="box" title="圆角框">框 ▢</button>
+  <button id="insChart" title="在这张图里加一个新图表：选图表类型，粘贴数据，放在想要的位置">图表 ▦</button>
   <button id="addOverlay" title="打开一张不是用脚本画的图（Origin、R 导出的 SVG，或 PNG），在上面加标注">＋ 外部图</button>
   <span class="sep"></span>
   <button id="painter" title="把所选对象的字号、粗细、颜色、线宽刷给别的对象">格式刷</button>
@@ -249,9 +250,9 @@ async function load() {
     }
   }
   for (const it of Object.values(items)) if (it.kind === "axes") {
-    const m = it.key.match(/^ax@(-?\d+),(-?\d+),(\d+),(\d+)/);
-    if (!m) continue;
-    const [x, y, w, h] = m.slice(1).map(Number), s = stored[it.key] || {};
+    const m = it.key.match(/^ax@(-?\d+),(-?\d+),(\d+),(\d+)/), r = m ? m.slice(1).map(Number) : it.rect_mm;
+    if (!r) continue;                                  // (an inserted chart's axes are keyed by the insert)
+    const [x, y, w, h] = r, s = stored[it.key] || {};
     it.w = w; it.h = h; it.prefix = it.key.slice(0, -"/axes".length) + "/";
     it.ox = (x + (s.dx_mm || 0)) / PT_MM; it.oy = (Hmm - (y + h + (s.dy_mm || 0))) / PT_MM;
   }
@@ -329,8 +330,9 @@ function drawShape(key) {                             // the editor's drawing of
 }
 function syncAdded() {
   for (const key of new Set([...Object.keys(cur), ...Object.keys(items)])) {
-    if (!key.startsWith("fig/added/")) continue;
+    if (!key.startsWith("fig/added/") || key.split("/").length !== 3) continue;
     const spec = (cur[key] || stored[key] || {}).add || {};
+    if (spec.type === "chart") continue;               // an inserted chart: its charts are ordinary items
     if ((spec.type || "text") === "text") { if (cur[key] && !items[key]) addedText(key); continue; }
     const id = drawShape(key);
     const v = { key, kind: "shape", shape: spec.type, added: true };
@@ -454,6 +456,9 @@ function previewStyle() {
         const e = svg.getElementById(`${it.own}_sp_${sd}`);
         if (e) e.style.display = want === "none" || (want === "open" && !sides.includes(sd)) ? "none" : "";
       }
+      const gr = c.grid || fc.grid || it.grid;         // gridlines: switching off shows at once
+      for (const a of ["x", "y"])
+        svg.querySelectorAll(`[id^="${it.own}_g${a}"]`).forEach(e => { e.style.display = gr === a || gr === "both" ? "" : "none"; });
     }
     if (TEXTY.has(it.kind) && it.border) {
       const off = c.border === false || (c.border === undefined && fc.textbox === "none");
@@ -708,7 +713,7 @@ function drawLayers() {
   const axes = all.filter(i => i.kind === "axes");
   const inAxes = it => axes.find(a => it.key.startsWith(a.prefix));
   const groups = [{ id: "fig", title: "画布、标题与插入", head: items["fig/figure"], kids: all.filter(i => i.kind !== "figure" && i.kind !== "axes" && !inAxes(i)) }];
-  for (const a of axes) groups.push({ id: a.key, title: `图表 ${a.panel || ""}`.trim() + `　${a.w}×${a.h} mm`, head: a,
+  for (const a of axes) groups.push({ id: a.key, title: (a.inset ? "插入的图表" : `图表 ${a.panel || ""}`.trim()) + `　${Math.round(a.w)}×${Math.round(a.h)} mm`, head: a,
                                       kids: all.filter(i => i !== a && i.key.startsWith(a.prefix)) });
   const sg = sel && groups.find(g => (g.head && g.head.key === sel.key) || g.kids.some(k => k.key === sel.key));
   if (sg) openGroups.add(sg.id);
@@ -838,19 +843,35 @@ function palettePicker(onPick, allowNone) {
   wrap.appendChild(el("div", { class: "row2" }, extra));
   return wrap;
 }
+const SERIESY = new Set(["line", "collection", "scatter", "patch", "image"]);
+let colorScope = "chart";
 function colorSection(title, key, colors, hint) {
   if (!colors || !colors.length) return;
   const box = section(title); box.style.display = "block";
-  const c = curOf(key), map = c.colors || {};
+  const it = items[key], ax = it && SERIESY.has(it.kind) ? axesOf(key) : null;
+  const scope = ax ? colorScope : "one";
+  const levels = [key].concat(ax ? [ax.key] : [], key !== "fig/figure" ? ["fig/figure"] : []);
+  const mapped = col => { for (const k of levels) { const m = (cur[k] || {}).colors || {}; if (m[col]) return m[col]; } return null; };
+  if (ax) {                                            // a series' line, band, markers and legend key share a colour
+    const sc = el("div", { class: "btns", style: "margin-bottom:6px" });
+    [["one", "只改这一个"], ["chart", "本图表同色一起改"], ["figure", "全图同色一起改"]].forEach(([v, t]) => {
+      const b = el("button", { text: t, onclick: () => { colorScope = v; drawProps(); } }); if (scope === v) b.className = "on"; sc.appendChild(b); });
+    box.appendChild(sc);
+  }
   const sw = el("div", { class: "swatches" });
-  colors.forEach(col => sw.appendChild(swatch(map[col] || col, { active: activeColor === col, changed: !!map[col], title: map[col] ? `${col} → ${map[col]}` : col,
-    onclick: () => { activeColor = activeColor === col ? null : col; drawProps(); } })));
+  colors.forEach(col => { const m = mapped(col); sw.appendChild(swatch(m || col, { active: activeColor === col, changed: !!m, title: m ? `${col} → ${m}` : col,
+    onclick: () => { activeColor = activeColor === col ? null : col; drawProps(); } })); });
   box.appendChild(sw);
-  box.appendChild(el("div", { class: "note", text: activeColor && colors.includes(activeColor) ? "选新颜色：" : hint }));
+  const target = scope === "chart" ? ax.key : scope === "figure" ? "fig/figure" : key;
+  box.appendChild(el("div", { class: "note", text: activeColor && colors.includes(activeColor) ? (scope === "chart" ? "选新颜色（这个图表里用这个颜色的线、色带、点、图例标记一起改）：" :
+    scope === "figure" ? "选新颜色（整张图里用这个颜色的地方一起改）：" : "选新颜色：") : hint }));
   if (activeColor && colors.includes(activeColor)) {
-    box.appendChild(palettePicker(nc => { push(); const o = curOf(key); o.colors = Object.assign({}, o.colors || {});
+    box.appendChild(palettePicker(nc => { push();
+      for (const k of levels) if (k !== target && cur[k] && cur[k].colors) delete cur[k].colors[activeColor];   // one level holds it
+      const o = curOf(target); o.colors = Object.assign({}, o.colors || {});
       if (nc.toLowerCase() === activeColor) delete o.colors[activeColor]; else o.colors[activeColor] = nc.toLowerCase(); afterEdit(); }));
-    if (map[activeColor]) box.appendChild(el("button", { text: "恢复原色", style: "margin-top:4px", onclick: () => { push(); delete curOf(key).colors[activeColor]; afterEdit(); } }));
+    if (mapped(activeColor)) box.appendChild(el("button", { text: "恢复原色", style: "margin-top:4px", onclick: () => { push();
+      for (const k of levels) if (cur[k] && cur[k].colors) delete cur[k].colors[activeColor]; afterEdit(); } }));
   }
 }
 function parentRect(it) {
@@ -948,7 +969,7 @@ function axesProps(it, c) {
   const td = c.tickdir || (cur["fig/figure"] || {}).tickdir || it.tickdir;
   btnRow(b, "刻度朝向", [["朝内", td === "in", choose(c, "tickdir", "in", it.tickdir)], ["朝外", td === "out", choose(c, "tickdir", "out", it.tickdir)],
                        ["内外", td === "inout", choose(c, "tickdir", "inout", it.tickdir)]]);
-  const gr = c.grid || it.grid;
+  const gr = c.grid || (cur["fig/figure"] || {}).grid || it.grid;
   btnRow(b, "网格线", [["无", "none"], ["竖线", "x"], ["横线", "y"], ["全部", "both"]].map(([t, v]) => [t, gr === v, choose(c, "grid", v, it.grid)]));
   for (const n of ["x", "y"]) {
     const a = section(`${n.toUpperCase()} 轴（坐标轴设置）`);
@@ -998,14 +1019,16 @@ function figFrameProps(fi) {
   btnRow(b, "文字外框", [["保留", c.textbox !== "none", choose(c, "textbox", undefined)], ["去掉", c.textbox === "none", choose(c, "textbox", "none"), "图中带框的标注去掉边框和白底"]]);
   btnRow(b, "刻度朝向", [["按脚本", !c.tickdir, choose(c, "tickdir", undefined)], ["朝内", c.tickdir === "in", choose(c, "tickdir", "in")],
                        ["朝外", c.tickdir === "out", choose(c, "tickdir", "out")], ["内外", c.tickdir === "inout", choose(c, "tickdir", "inout")]]);
+  btnRow(b, "网格线", [["按脚本", !c.grid, choose(c, "grid", undefined)], ["全去掉", c.grid === "none", choose(c, "grid", "none"), "所有图表都不画网格线"],
+                      ["横线", c.grid === "y", choose(c, "grid", "y")], ["竖线", c.grid === "x", choose(c, "grid", "x")], ["全部", c.grid === "both", choose(c, "grid", "both")]]);
   b.appendChild(el("div", { class: "note", style: "grid-column:1/3", text: "选中单个图表还能另设，优先于这里。" }));
-  btnRow(b, "全稿", [["把这三项用到全稿所有图", 0, async () => {
+  btnRow(b, "全稿", [["把这几项用到全稿所有图", 0, async () => {
     if (dirtyKeys().some(k => k !== fi.key)) { setStatus("先保存这张图的其他改动", true); return; }
     const st = cur[fi.key] || {};
-    if (!confirm(`把「图表框线：${({ full: "有框线", open: "无框线", none: "无轴线" })[st.frame] || "按脚本"}，文字外框：${st.textbox === "none" ? "去掉" : "保留"}，刻度朝向：${({ in: "朝内", out: "朝外", inout: "内外" })[st.tickdir] || "按脚本"}」用到全稿每一张图并重新出图？`)) return;
+    if (!confirm(`把「图表框线：${({ full: "有框线", open: "无框线", none: "无轴线" })[st.frame] || "按脚本"}，文字外框：${st.textbox === "none" ? "去掉" : "保留"}，刻度朝向：${({ in: "朝内", out: "朝外", inout: "内外" })[st.tickdir] || "按脚本"}，网格线：${({ none: "全去掉", x: "竖线", y: "横线", both: "全部" })[st.grid] || "按脚本"}」用到全稿每一张图并重新出图？`)) return;
     setStatus("全稿重新出图中…");
     const res = await fetch("/style_all", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ frame: st.frame || null, textbox: st.textbox || null, tickdir: st.tickdir || null }) }).then(x => x.json());
+      body: JSON.stringify({ frame: st.frame || null, textbox: st.textbox || null, tickdir: st.tickdir || null, grid: st.grid || null }) }).then(x => x.json());
     drawLog.text = res.log; await load(); setStatus(/ERROR/.test(res.log) ? "有图出图失败，见日志" : "全稿已更新", /ERROR/.test(res.log));
   }, "每张图的画布设置都改成这样，并重新出图"]]);
 }
@@ -1066,6 +1089,7 @@ function drawProps() {
       btnRow(v, "文字", [["A−", 0, () => { push(); tx.forEach(k => curOf(k).size = num(cur[k], "size", 1) / 1.05); afterEdit(); }],
                         ["A+", 0, () => { push(); tx.forEach(k => curOf(k).size = num(cur[k], "size", 1) * 1.05); afterEdit(); }],
                         ["B", 0, () => { push(); const on = tx.every(k => cur[k].weight === "bold"); tx.forEach(k => curOf(k).weight = on ? "normal" : "bold"); afterEdit(); }, "加粗/取消", "font-weight:700"]]);
+    multiStyle([...multi]);
     drawLog(); return;
   }
   const it = sel && items[sel.key];
@@ -1079,8 +1103,7 @@ function drawProps() {
         if (nc.toLowerCase() === (fi.background || "#ffffff")) delete o.background; else o.background = nc.toLowerCase(); afterEdit(); }));
       colorSection("全图配色", fi.key, meta.palette || [], "点一个颜色，再选新颜色：整张图里用到它的地方一起改。");
       if (Object.values(items).some(x => x.kind === "axes" && x.frame)) figFrameProps(fi);
-      else if (!meta.tweak_version && !meta.overlay) P.appendChild(el("div", { class: "note", text:
-        "这篇论文的 tweak.py 是旧版，框线、坐标轴范围、参考线等功能用不了：在论文列表点「接入新论文」，选这篇论文的图文件夹再接入一次即可升级（图会逐像素核对）。" }));
+      if (!meta.overlay) upgradeNote(P);
     }
     P.appendChild(el("div", { class: "note", text: "选中对象后在这里改属性。Shift+点击多选。" }));
     drawLog(); return;
@@ -1167,6 +1190,7 @@ function drawProps() {
         if (c.data) btnRow(d, "", [[`恢复脚本原数据（${Object.keys(c.data).length} 组已改）`, 0, () => { push(); delete c.data; afterEdit(); }]]);
       }
     }
+    if (it.kind === "axes" && it.inset) insetProps(it.inset);
     if (it.added_series) {
       const ax = axesOf(it.key), sid = it.key.split("/").slice(-2)[0], i = ax ? (curOf(ax.key).series || []).findIndex(s => String(s.id) === sid) : -1;
       if (i >= 0) btnRow(section("添加的系列"), "", [["编辑这个系列的数据", 0, () => openAddSeries(ax, i)]]);
@@ -1179,6 +1203,39 @@ function drawProps() {
   if (it.added) b.appendChild(el("button", { class: "danger", text: "删除", onclick: () => { push(); delete cur[it.key]; select(null); syncAdded(); afterEdit(); } }));
   P.appendChild(b);
   drawLog();
+}
+function multiStyle(ks) {
+  const cols = [...new Set(ks.flatMap(k => items[k].colors || []))];
+  if (cols.length) {
+    const box = section("颜色（所选对象一起改）"); box.style.display = "block";
+    const mapped = col => { for (const k of ks) { const m = (cur[k] || {}).colors || {}; if (m[col]) return m[col]; } return null; };
+    const sw = el("div", { class: "swatches" });
+    cols.forEach(col => { const m = mapped(col); sw.appendChild(swatch(m || col, { active: activeColor === col, changed: !!m, title: m ? `${col} → ${m}` : col,
+      onclick: () => { activeColor = activeColor === col ? null : col; drawProps(); } })); });
+    box.appendChild(sw);
+    box.appendChild(el("div", { class: "note", text: activeColor && cols.includes(activeColor) ? "选新颜色：" : "点一个颜色，再选新颜色：所选对象里用到它的地方一起改。" }));
+    if (activeColor && cols.includes(activeColor)) {
+      box.appendChild(palettePicker(nc => { push();
+        for (const k of ks) if ((items[k].colors || []).includes(activeColor)) {
+          const o = curOf(k); o.colors = Object.assign({}, o.colors || {});
+          if (nc.toLowerCase() === activeColor) delete o.colors[activeColor]; else o.colors[activeColor] = nc.toLowerCase();
+        }
+        afterEdit(); }));
+      if (mapped(activeColor)) box.appendChild(el("button", { text: "恢复原色", style: "margin-top:4px", onclick: () => { push();
+        ks.forEach(k => { if (cur[k] && cur[k].colors) delete cur[k].colors[activeColor]; }); afterEdit(); } }));
+    }
+  }
+  const lk = ks.filter(k => LW.has(items[k].kind) && items[k].kind !== "axes");
+  if (lk.length) {
+    const b = section("线条（所选对象一起改）");
+    numField(b, "线宽 ×", num(cur[lk[0]], "lw", 1), 0.1, v => lk.forEach(k => curOf(k).lw = v || 1));
+    const r = el("input", { type: "range", min: 0.05, max: 1, step: 0.05 }); r.value = num(cur[lk[0]], "alpha", 1);
+    r.onchange = () => { push(); lk.forEach(k => { if (+r.value === 1) delete curOf(k).alpha; else curOf(k).alpha = +r.value; }); afterEdit(false); };
+    b.append(el("label", { text: "不透明度" }), r);
+    const ls = lk.filter(k => items[k].ls !== undefined);
+    if (ls.length) btnRow(b, "线型", [["实线", "-"], ["虚线", "--"], ["点线", ":"], ["点划线", "-."]].map(([t, v]) => [t, ls.every(k => (cur[k] || {}).ls === v),
+      () => { push(); ls.forEach(k => { const c = curOf(k); if (v === (items[k].ls || "-")) delete c.ls; else c.ls = v; delete c.dash; }); afterEdit(); }]));
+  }
 }
 function drawLog() {
   $("props").appendChild(el("h3", { text: "出图日志" }));
@@ -1271,6 +1328,7 @@ async function openData(axKey, page) {
   const D = $("dlg"); D.classList.add("wide"); $("modal").classList.add("open");
   D.innerHTML = "<h2>数据</h2><div class='note'>读取中…</div>";
   const src = await fetch("/source?" + Date.now()).then(r => r.json()).catch(() => ({ files: [] }));
+  src.save = body => post("/source_save", body);
   const charts = Object.values(items).filter(x => x.kind === "axes" && x.series && x.series.length);
   const pages = [];
   if (src.template) pages.push(["table", "源数据表"], ["settings", "图表设置"]);
@@ -1390,18 +1448,6 @@ function openAddSeries(ax, idx) {
   if (s.marker_on === undefined) s.marker_on = s.marker !== "";
   draw();
 }
-function tablePage(body, src) {
-  const t = src.table;
-  body.appendChild(el("div", { class: "note", text: `这张图由模板「${src.template.name}」生成，画的就是这张表（${src.data_file}）。改表、加行加列都可以；列名改了的话到「图表设置」里重新对应。` }));
-  const g = gridEditor({ cols: t.columns, rows: t.rows, colsEditable: true });
-  body.appendChild(g.el);
-  body.appendChild(el("div", { class: "btns", style: "margin-top:14px" }, [
-    el("button", { class: "primary", text: "保存表格并重新出图", onclick: () => {
-      const v = g.get(); if (new Set(v.cols).size !== v.cols.length) { alert("列名有重复。"); return; }
-      closeDlg(); post("/source_save", { table: { columns: v.cols, rows: v.rows } }); } }),
-    el("button", { text: "用 Excel 打开", title: "改完保存，再点「保存并重新出图」或重新打开这个对话框", onclick: () =>
-      fetch("/open_path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: src.data_file }) }) })]));
-}
 function fieldInput(f, value, cols, table) {           // one chart setting, by its kind in the template catalog
   const [k, label, kind] = f;
   let inp;
@@ -1421,32 +1467,61 @@ function fieldInput(f, value, cols, table) {           // one chart setting, by 
   inp.dataset.key = k; inp.dataset.kind = kind;
   return [el("label", { text: label }), inp];
 }
-function settingsPage(body, src, tid) {
-  tid = tid || src.template.template;
-  const cat = src.catalog, t = cat.templates.find(x => x.id === tid), same = tid === src.template.template;
-  const cols = src.table.columns, fig = src.template.figure;
-  const vals = Object.assign({}, t.defaults, same ? src.template.values : {});
-  if (!same) for (const f of t.fields) {               // a new chart type: keep matching settings, guess the columns
-    if (src.template.values[f[0]] !== undefined && typeof src.template.values[f[0]] === typeof t.defaults[f[0]] &&
-        (!/^(text|number)/.test(f[2]) || cols.includes(src.template.values[f[0]]))) vals[f[0]] = src.template.values[f[0]];
+function tablePage(body, src) {
+  const t = src.table;
+  body.appendChild(el("div", { class: "note", text: src.inset ? "这个插入的图表画的就是这张表。改表、加行加列都可以；列名改了的话到「图表设置」里重新对应。" :
+    `这张图由模板「${src.template.name}」生成，画的就是这张表（${src.data_file}）。改表、加行加列都可以；列名改了的话到「图表设置」里重新对应。` }));
+  const g = gridEditor({ cols: t.columns, rows: t.rows, colsEditable: true });
+  body.appendChild(g.el);
+  const bt = el("div", { class: "btns", style: "margin-top:14px" }, [
+    el("button", { class: "primary", text: "保存表格并重新出图", onclick: () => {
+      const v = g.get(); if (new Set(v.cols).size !== v.cols.length) { alert("列名有重复。"); return; }
+      closeDlg(); src.save({ table: { columns: v.cols, rows: v.rows } }); } })]);
+  if (!src.inset) bt.appendChild(el("button", { text: "用 Excel 打开", title: "改完保存，再点「保存并重新出图」或重新打开这个对话框", onclick: () =>
+    fetch("/open_path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: src.data_file }) }) }));
+  body.appendChild(bt);
+}
+function numericCols(table) {
+  return table.columns.map((_, j) => { const v = table.rows.map(r => String(r[j] ?? "").trim()).filter(x => x !== "");
+    return v.length > 0 && v.every(x => !isNaN(Number(x.replace(/−/g, "-").replace(/,/g, "")))); });
+}
+function guessValues(t, table, prev) {                 // a chart type's settings for a table: keep what fits, guess columns
+  const cols = table.columns, isNum = numericCols(table), vals = Object.assign({}, t.defaults);
+  for (const f of t.fields) {
+    const p = (prev || {})[f[0]];
+    if (p !== undefined && typeof p === typeof t.defaults[f[0]] && (!/^(text|number)/.test(f[2]) || cols.includes(p) || p === "")) vals[f[0]] = p;
     else if (/^(text|number)\??$/.test(f[2]) && !cols.includes(vals[f[0]])) {
-      const want = f[2].startsWith("number"), isNum = j => src.table.numeric[j];
-      const pick = cols.find((c, j) => isNum(j) === want && !Object.values(vals).includes(c)) || cols.find((c, j) => isNum(j) === want);
+      const want = f[2].startsWith("number");
+      const pick = cols.find((c, j) => isNum[j] === want && !Object.values(vals).includes(c)) || cols.find((c, j) => isNum[j] === want);
       vals[f[0]] = f[2].endsWith("?") ? "" : (pick || cols[0]);
     }
   }
+  return vals;
+}
+function settingsPage(body, src, tid) {
+  tid = tid || src.template.template;
+  const cat = src.catalog, t = cat.templates.find(x => x.id === tid), same = tid === src.template.template;
+  const cols = src.table.columns, fig = src.template.figure || {};
+  const vals = same ? Object.assign({}, t.defaults, src.template.values) : guessValues(t, src.table, src.template.values);
   const f0 = el("div", { class: "prop", style: "grid-template-columns:150px 1fr;max-width:720px" });
   const sel = el("select");
   sel.innerHTML = cat.purposes.map(([p, pn]) => `<optgroup label="${esc(pn)}">` + cat.templates.filter(x => x.purpose === p)
     .map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join("") + "</optgroup>").join("");
   sel.value = tid; sel.onchange = () => { body.innerHTML = ""; settingsPage(body, src, sel.value); };
   f0.append(el("label", { text: "图表类型" }), sel);
-  if (!same) f0.append(el("div"), el("div", { class: "note", style: "color:var(--red);font-weight:700", text:
-    `换成「${t.name}」会重写脚本的画图部分；原来在编辑器里做的手动调整大多对应不上，需要重新调。` }));
+  if (!same && !src.fresh) f0.append(el("div"), el("div", { class: "note", style: "color:var(--red);font-weight:700", text:
+    `换成「${t.name}」会重写画图部分；原来在编辑器里对它做的手动调整大多对应不上，需要重新调。` }));
   f0.append(el("label", { text: "说明" }), el("div", { class: "note", text: t.when }));
-  const W = el("input", { type: "number", step: 1 }); W.value = fig.WIDTH_MM;
-  const H = el("input", { type: "number", step: 1 }); H.value = fig.HEIGHT_MM;
-  f0.append(el("label", { text: "宽 × 高（mm）" }), el("div", { class: "pair" }, [W, H]));
+  let W, H, BX, BY;
+  if (src.box) {                                       // a chart inserted into the figure: where it goes
+    BX = el("input", { type: "number", step: 0.5 }); BX.value = src.box.x_mm; BY = el("input", { type: "number", step: 0.5 }); BY.value = src.box.y_mm;
+    f0.append(el("label", { text: "左下角 x / y（mm）" }), el("div", { class: "pair" }, [BX, BY]));
+  }
+  if (!src.inset || src.box) {
+    W = el("input", { type: "number", step: 1 }); W.value = src.box ? src.box.w_mm : fig.WIDTH_MM;
+    H = el("input", { type: "number", step: 1 }); H.value = src.box ? src.box.h_mm : fig.HEIGHT_MM;
+    f0.append(el("label", { text: "宽 × 高（mm）" }), el("div", { class: "pair" }, [W, H]));
+  }
   const T = el("input", { type: "text", placeholder: "可空" }); T.value = fig.TITLE || "";
   f0.append(el("label", { text: "图内标题" }), T);
   body.appendChild(f0);
@@ -1463,16 +1538,19 @@ function settingsPage(body, src, tid) {
   inputs.forEach(i => { if (/^(text|number)/.test(i.dataset.kind)) i.addEventListener("change", fillValues); });
   fillValues();
   body.appendChild(f);
-  body.appendChild(el("div", { class: "note", text: "改宽高会让图表位置变化，编辑器里对图表的位置调整可能要重做。" }));
-  body.appendChild(el("div", { class: "btns", style: "margin-top:14px" }, [el("button", { class: "primary", text: "保存设置并重新出图", onclick: () => {
+  if (!src.inset) body.appendChild(el("div", { class: "note", text: "改宽高会让图表位置变化，编辑器里对图表的位置调整可能要重做。" }));
+  body.appendChild(el("div", { class: "btns", style: "margin-top:14px" }, [el("button", { class: "primary", text: src.fresh ? "插入并出图" : "保存设置并重新出图", onclick: () => {
     const values = {};
     for (const i of inputs) {
       const k = i.dataset.key, kind = i.dataset.kind;
       values[k] = kind === "bool" ? i.checked : kind === "int" ? parseInt(i.value || "0", 10) : kind === "float" ? parseFloat(i.value || "0") : i.value;
     }
-    if (!same && !confirm(`把这张图换成「${t.name}」并重写脚本的画图部分？`)) return;
+    if (!same && !src.fresh && !confirm(`换成「${t.name}」并重写画图部分？`)) return;
     closeDlg();
-    post("/source_save", { template: tid, values, figure: { WIDTH_MM: +W.value || fig.WIDTH_MM, HEIGHT_MM: +H.value || fig.HEIGHT_MM, TITLE: T.value } });
+    const out = { template: tid, values, title: T.value };
+    if (src.box) out.box = { x_mm: +BX.value, y_mm: +BY.value, w_mm: Math.max(10, +W.value || src.box.w_mm), h_mm: Math.max(10, +H.value || src.box.h_mm) };
+    else if (!src.inset) out.figure = { WIDTH_MM: +W.value || fig.WIDTH_MM, HEIGHT_MM: +H.value || fig.HEIGHT_MM, TITLE: T.value };
+    src.save(out);
   } })]));
 }
 function filesPage(body, src) {
@@ -1482,6 +1560,104 @@ function filesPage(body, src) {
   body.appendChild(el("div", { class: "btns", style: "margin-top:14px" }, [el("button", { class: "primary", text: "按现在的数据重新出图", onclick: () => { closeDlg(); post("/render", {}); } })]));
 }
 $("dataBtn").onclick = () => openData(sel ? sel.key : null);
+// ---- a new chart inside this figure: chart type, data, place ----------------------------------------------------
+const canInsert = () => String(meta.tweak_version || "") >= "1.4" && !meta.overlay;
+async function openInsertChart() {
+  const D = $("dlg"); D.classList.add("wide"); $("modal").classList.add("open");
+  if (!canInsert()) {
+    D.innerHTML = "";
+    D.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px" }, [el("h2", { text: "插入图表" }),
+      el("button", { text: "关闭", style: "margin-left:auto", onclick: closeDlg })]));
+    D.appendChild(el("div", { class: "note", text: meta.overlay ? "外部图（Origin、R 导出的 SVG/PNG）上不能插入图表，只能加标注。" :
+      "这篇论文的 tweak.py 是旧版，插入图表要 1.4。先升级：" }));
+    if (!meta.overlay) upgradeNote(D);
+    return;
+  }
+  D.innerHTML = "<h2>插入图表</h2><div class='note'>读取模板…</div>";
+  const cat = await fetch("/templates").then(r => r.json());
+  let purpose = "";
+  const gallery = () => {
+    D.innerHTML = "";
+    D.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px" }, [el("h2", { text: "插入图表 · 选类型" }),
+      el("button", { text: "取消", style: "margin-left:auto", onclick: closeDlg })]));
+    const chips = el("div", { class: "btns", style: "margin:6px 0 10px" });
+    [["", "全部"]].concat(cat.purposes).forEach(([p, n]) => { const b = el("button", { text: n, onclick: () => { purpose = p; gallery(); } }); if (p === purpose) b.className = "on"; chips.appendChild(b); });
+    D.appendChild(chips);
+    const grid = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px" });
+    cat.templates.filter(t => !purpose || t.purpose === purpose).forEach(t => grid.appendChild(el("div", {
+      style: "border:1px solid var(--line);border-radius:6px;padding:6px;cursor:pointer;background:#fff", title: t.when,
+      onclick: () => dataStep(t) }, [el("img", { src: "/template_thumb?id=" + t.id, style: "width:100%;height:110px;object-fit:contain;display:block" }),
+      el("div", { text: t.name, style: "font-weight:700;font-size:13px;margin-top:4px" })])));
+    D.appendChild(grid);
+  };
+  const dataStep = async (t, table) => {
+    table = table || await fetch("/template_sample?id=" + t.id).then(r => r.json());
+    D.innerHTML = "";
+    D.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px" }, [el("h2", { text: `插入图表 · ${t.name} · 数据` }),
+      el("button", { text: "← 换类型", style: "margin-left:auto", onclick: gallery }), el("button", { text: "取消", onclick: closeDlg })]));
+    D.appendChild(el("div", { class: "note", text: `${t.data} 表里现在是示例数据：从 Excel 复制整块（含第一行列名）点左上第一格粘贴，或直接改。` }));
+    const g = gridEditor({ cols: table.columns, rows: table.rows, colsEditable: true });
+    D.appendChild(g.el);
+    D.appendChild(el("div", { class: "btns", style: "margin-top:12px" }, [
+      el("button", { text: "清空数据（保留列名）", onclick: () => { const v = g.get(); dataStep(t, { columns: v.cols, rows: [v.cols.map(() => "")] }); } }),
+      el("button", { class: "primary", text: "下一步：对应列和位置", onclick: () => {
+        const v = g.get(), rows = v.rows.filter(r => r.some(x => String(x).trim() !== ""));
+        if (new Set(v.cols).size !== v.cols.length) { alert("列名有重复。"); return; }
+        if (!rows.length) { alert("表里还没有数据。"); return; }
+        placeStep(t, { columns: v.cols, rows });
+      } })]));
+  };
+  const placeStep = (t, table) => {
+    const [W, H] = meta.size_mm || [180, 120], [cx, cy] = viewCentreMm();
+    const w = Math.min(t.size[0], W * 0.6), h = Math.min(t.size[1], H * 0.6);
+    const box = { x_mm: +Math.max(0, Math.min(W - w, cx - w / 2)).toFixed(1), y_mm: +Math.max(0, Math.min(H - h, cy - h / 2)).toFixed(1), w_mm: +w.toFixed(1), h_mm: +h.toFixed(1) };
+    D.innerHTML = "";
+    D.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px" }, [el("h2", { text: `插入图表 · ${t.name} · 对应列和位置` }),
+      el("button", { text: "← 改数据", style: "margin-left:auto", onclick: () => dataStep(t, table) }), el("button", { text: "取消", onclick: closeDlg })]));
+    D.appendChild(el("div", { class: "note", text: `整张图 ${W.toFixed(0)} × ${H.toFixed(0)} mm；位置从左下角量起。插入后可以像别的图表一样拖动、改颜色、改字号；数据和设置在选中它以后的「插入的图表」里改。` }));
+    const body = el("div"); D.appendChild(body);
+    settingsPage(body, { template: { template: t.id, values: {}, figure: { TITLE: "" } }, catalog: cat, table, inset: true, fresh: true, box,
+      save: out => post("/chart_insert", Object.assign(out, { table: { columns: table.columns, rows: table.rows } })) });
+  };
+  gallery();
+}
+$("insChart").onclick = openInsertChart;
+function insetProps(key) {                              // the chart inserted into this figure that the selection belongs to
+  const c = cur[key]; if (!c || !c.add) return;
+  const a = c.add, b = section("插入的图表");
+  pairFields(b, "左下 x / y（mm）", [a.x_mm, v => { c.add = Object.assign({}, c.add, { x_mm: v }); }], [a.y_mm, v => { c.add = Object.assign({}, c.add, { y_mm: v }); }]);
+  pairFields(b, "宽 / 高（mm）", [a.w_mm, v => { c.add = Object.assign({}, c.add, { w_mm: Math.max(10, v) }); }], [a.h_mm, v => { c.add = Object.assign({}, c.add, { h_mm: Math.max(10, v) }); }]);
+  b.appendChild(el("div", { class: "note", style: "grid-column:1/3", text: "位置和大小在保存出图后生效。拖动图表只移动这一个坐标框。" }));
+  btnRow(b, "", [["改数据和设置", 0, () => openChartEdit(key)],
+                 ["删除这个图表", 0, () => { if (!confirm("从这张图里删除这个插入的图表？")) return; push(); delete cur[key]; select(null); afterEdit(); $("save").click(); }, "", "color:var(--red)"]]);
+}
+async function openChartEdit(key, page) {
+  const D = $("dlg"); D.classList.add("wide"); $("modal").classList.add("open");
+  D.innerHTML = "<h2>插入的图表</h2><div class='note'>读取中…</div>";
+  const src = await fetch("/chart_source?key=" + encodeURIComponent(key)).then(r => r.json());
+  D.innerHTML = "";
+  D.appendChild(el("div", { style: "display:flex;align-items:center;gap:10px" }, [el("h2", { text: "插入的图表" + (src.template ? "：" + src.template.name : "") }),
+    el("button", { text: "关闭", style: "margin-left:auto", onclick: closeDlg })]));
+  if (!src.template) { D.appendChild(el("div", { class: "note", text: "找不到这个图表的画图脚本。" })); return; }
+  src.inset = true; src.save = body => post("/chart_save", Object.assign({ key }, body));
+  page = page || "table";
+  const tabs = el("div", { class: "btns", style: "margin:6px 0 10px" });
+  [["table", "数据表"], ["settings", "图表设置"]].forEach(([k, n]) => { const b = el("button", { text: n, onclick: () => openChartEdit(key, k) }); if (k === page) b.className = "on"; tabs.appendChild(b); });
+  D.appendChild(tabs);
+  const body = el("div"); D.appendChild(body);
+  (page === "table" ? tablePage : settingsPage)(body, src);
+}
+async function upgradeNote(box) {                       // the paper's tweak.py is older than this editor
+  const h = await fetch("/tweak_home").then(r => r.json()).catch(() => ({}));
+  if (!h.folder || !h.version || h.version >= h.latest) return;
+  const inHub = await fetch("/hub/ping").then(r => r.ok).catch(() => false);
+  box.appendChild(el("div", { class: "note", style: "border:1px solid var(--red);padding:8px 10px;margin-top:10px" }, [
+    el("div", { text: `这篇论文的 tweak.py 是 ${h.version} 版，编辑器是 ${h.latest} 版：网格即时预览、数据表、添加系列、插入图表等要新版。升级会替换 ${h.folder} 里的 tweak.py，并把这篇论文的图全部重新出图、逐像素核对。` }),
+    inHub ? el("button", { class: "primary", text: "升级这篇论文", style: "margin-top:6px", onclick: () => {
+      if (dirtyKeys().length && !confirm("有未保存的调整，升级会放弃它们。继续？")) return;
+      location.href = "/?onboard=" + encodeURIComponent(h.folder); } })
+      : el("div", { text: "在论文调图的论文列表里点「接入新论文」，选这个文件夹即可升级。" })]));
+}
 
 // ---- consistency across figures ------------------------------------------------------------------------------------
 async function openConsistency() {

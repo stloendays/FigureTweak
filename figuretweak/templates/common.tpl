@@ -6,9 +6,17 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.normpath(os.path.join(HERE, STYLE_DIR)))
-import style as S  # noqa: E402  the paper's house style: Page and its colours
-from style import Page  # noqa: E402
+INSET = "FIG" in globals()                         # inserted into another figure by the editor (FIG, BOX given)
+if INSET:
+    S = sys.modules.get("style") or type("NoStyle", (), {})   # that figure's style module, already loaded
+    OX, OY, WIDTH_MM, HEIGHT_MM = BOX              # the box this chart fills, mm from the figure's bottom-left
+    PAGE_W, PAGE_H = (float(v) * 25.4 for v in FIG.get_size_inches())
+else:
+    sys.path.insert(0, os.path.normpath(os.path.join(HERE, STYLE_DIR)))
+    import style as S  # noqa: E402  the paper's house style: Page and its colours
+    from style import Page  # noqa: E402
+    OX = OY = 0.0
+    PAGE_W, PAGE_H = WIDTH_MM, HEIGHT_MM
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.font_manager import FontProperties  # noqa: E402
 
@@ -55,17 +63,21 @@ def column(name, kind="text"):
     return numbers(T[name]) if kind == "number" else T[name]
 
 
+def box_ax(left, bottom, w, h, **kw):
+    """An axes at (left, bottom, w, h) mm inside the chart's box."""
+    return pg.fig.add_axes([(OX + left) / PAGE_W, (OY + bottom) / PAGE_H, w / PAGE_W, h / PAGE_H], **kw)
+
+
 def chart(left=14.0, bottom=11.0, right=3.0, top=None):
-    """The main axes, in mm from the page's edges, leaving room for the title."""
+    """The main axes, in mm from the box's edges, leaving room for the title."""
     top = (7.0 if TITLE else 3.0) if top is None else top
-    return pg.ax(left, bottom, WIDTH_MM - left - right, HEIGHT_MM - bottom - top)
+    return box_ax(left, bottom, WIDTH_MM - left - right, HEIGHT_MM - bottom - top)
 
 
 def polar_chart(left=6.0, bottom=6.0, right=6.0, top=None):
-    """A polar axes (radar, rose), in mm from the page's edges."""
+    """A polar axes (radar, rose), in mm from the box's edges."""
     top = (10.0 if TITLE else 6.0) if top is None else top
-    w, h = WIDTH_MM - left - right, HEIGHT_MM - bottom - top
-    return pg.fig.add_axes([left / WIDTH_MM, bottom / HEIGHT_MM, w / WIDTH_MM, h / HEIGHT_MM], projection="polar")
+    return box_ax(left, bottom, WIDTH_MM - left - right, HEIGHT_MM - bottom - top, projection="polar")
 
 
 def numeric_columns(names=""):
@@ -88,12 +100,18 @@ def kde(d, grid, bw=0.0):
 
 def finish(ax):
     if TITLE:
-        pg.fig.text(1.0 / WIDTH_MM, 1 - 1.0 / HEIGHT_MM, TITLE, fontweight="bold", va="top", ha="left")
-    pg.save(HERE, STEM)
+        pg.fig.text((OX + 1.0) / PAGE_W, (OY + HEIGHT_MM - 1.0) / PAGE_H, TITLE, fontweight="bold", va="top", ha="left")
+    if not INSET:
+        pg.save(HERE, STEM)
+
+
+class _Inset:
+    fig = FIG if INSET else None
 
 
 T = read_table(DATA)
-pg = Page(WIDTH_MM, HEIGHT_MM)
+pg = _Inset() if INSET else Page(WIDTH_MM, HEIGHT_MM)
 _fam = plt.rcParams["font.family"]                # set after Page, which applies the paper's fonts: Chinese text
-plt.rcParams["font.family"] = list(_fam if isinstance(_fam, list) else [_fam]) + ["Microsoft YaHei", "SimHei"]
+if "Microsoft YaHei" not in _fam:
+    plt.rcParams["font.family"] = list(_fam if isinstance(_fam, list) else [_fam]) + ["Microsoft YaHei", "SimHei"]
 SMALL = FontProperties(size=plt.rcParams["xtick.labelsize"]).get_size_in_points()   # annotations: tick-label size

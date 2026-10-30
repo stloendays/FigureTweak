@@ -33,6 +33,6 @@ ref = [float("%.2g" % (zmax * f)) for f in (0.25, 0.5, 1.0)]
 keys = [Line2D([], [], ls="none", marker="o", markersize=np.sqrt(r / zmax * MAX_AREA), mfc="none", mec=INK,
                mew=0.6, label="%g" % r) for r in ref]
 pos = ax.get_position()
-pg.fig.legend(handles=keys, title=SIZE_TITLE, loc="center left", bbox_to_anchor=(pos.x1 + 1.5 / WIDTH_MM, 0.5),
+pg.fig.legend(handles=keys, title=SIZE_TITLE, loc="center left", bbox_to_anchor=(pos.x1 + 1.5 / PAGE_W, pos.y0 + pos.height / 2),
               labelspacing=1.3, borderpad=0.6, handletextpad=1.0)
 finish(ax)

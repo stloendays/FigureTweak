@@ -20,9 +20,9 @@ n, ncol = len(sets), len(top)
 row = 4.2
 L, mh = 38.0, row * n
 mtop = 7.0 if TITLE else 3.0
-am = pg.ax(L, 10.0, WIDTH_MM - L - 3.0, mh)
-ab = pg.ax(L, 10.0 + mh + 1.5, WIDTH_MM - L - 3.0, HEIGHT_MM - (10.0 + mh + 1.5) - mtop)
-asz = pg.ax(3.0, 10.0, 17.0, mh)
+am = box_ax(L, 10.0, WIDTH_MM - L - 3.0, mh)
+ab = box_ax(L, 10.0 + mh + 1.5, WIDTH_MM - L - 3.0, HEIGHT_MM - (10.0 + mh + 1.5) - mtop)
+asz = box_ax(3.0, 10.0, 17.0, mh)
 for j, (k, c) in enumerate(top):
     on = [i for i in range(n) if i in k]
     am.scatter([j] * n, range(n), s=16, color=["#d5d8de"] * n, zorder=2, linewidths=0)
