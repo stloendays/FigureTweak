@@ -7,6 +7,7 @@ Set-Location $PSScriptRoot
 $src = "figuretweak"
 $data = "figure_tweak.html", "figure_hub.html", "figure_hub_inject.js", "tweak.py", "figure_papers.json", "figure_hub.ico" |
     ForEach-Object { "--add-data"; "$src\$_;." }
+$data += "--add-data", "$src\templates;templates"          # chart templates, their sample data and thumbnails
 & $Python -m PyInstaller --noconfirm --clean --onefile --windowed --name FigureTweak `
     --icon "$src\figure_hub.ico" --paths $src @data `
     --exclude-module numpy --exclude-module matplotlib --exclude-module pandas `

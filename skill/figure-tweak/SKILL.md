@@ -69,6 +69,31 @@ All stored in `<stem>.tweaks.json`, so the script stays the source and every set
 A paper whose `tweak.py` predates 1.1 shows none of this; re-run 接入新论文 on its figures folder: onboarding upgrades
 `tweak.py` and re-renders with the pixel comparison.
 
+## New figures from chart templates (FigureTweak 1.2)
+
+The start page's 「新建图表」 (on a paper's page) makes a new editable figure from one of 16 chart templates:
+bar + error bars, grouped bar, stacked bar, waterfall, ranked lollipop, slope (rank change), dumbbell, box + points,
+violin, histogram, scatter + linear fit, parity, multi-line, heatmap, forest (estimate + interval), reaction energy
+profile. The user filters by purpose, loads a CSV/TSV or pastes from Excel, maps columns (guessed by type), previews
+with the paper's own `style.py`, names the figure (and optionally its manuscript number), and it opens in the editor.
+
+What it writes, in a new folder `<figures home>/<stem lower>/` beside the paper's other figure folders:
+`make_<stem>.py` (settings block at the top, then shared helpers, then the drawing code; `STYLE_DIR = ".."` points
+at the folder with the paper's `style.py` and `tweak.py`) and `<stem>_data.csv`. If the paper has no hooked Page,
+the folder also gets the bundled house style as `style.py` plus `tweak.py`. The script is an ordinary figure script
+from then on: change data, settings or drawing code and rerun it.
+
+- Templates live in `figuretweak/templates/`: `<id>.tpl` (settings + drawing), `common.tpl` (table reading, palette
+  from the paper's style constants `RU FE AMB OS DARK_B DARK_G RED INK MID`, CJK font fallback set after `Page()`),
+  `catalog.json` (Chinese name, purpose, when to use, fields), `samples/<id>.csv`, `thumbs/<id>.png`.
+- Field kinds in `catalog.json`: `text`/`number` (a column; `?` = optional), `label`, `bool`, `int`, `float`,
+  `choice:val=名,...`, `value:FIELD` (one value of another field's column, e.g. the item to highlight).
+- Adding a template: write `<id>.tpl` and `samples/<id>.csv`, add it to `catalog.json`, then run
+  `python figuretweak/templates/make_thumbs.py <python with matplotlib>`: it renders every template from its sample
+  data exactly as the start page would, fails on any template that does not render or is not editable, and writes
+  the thumbnails.
+- The repository is public: sample data must be synthetic, never numbers from an unpublished paper.
+
 ## figure_labels.json
 
 At the figures root, maps figures to the manuscript's numbers; its order is the order the editor lists them in.

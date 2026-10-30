@@ -125,6 +125,39 @@
   details summary { cursor:pointer; font-weight:700; margin-top:10px; }
   h1 .edit { border:none; background:none; padding:2px 6px; vertical-align:2px; color:var(--blue-d); }
   .ver-foot { margin-top:14px; font-size:12px; color:var(--ink2); }
+  /* new figure from a chart template */
+  .dlg.wide { width:min(1180px, 100%); max-height:92vh; padding:20px 24px; }
+  .purp { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 14px; }
+  .purp button { padding:4px 12px; border-radius:16px; font-size:13px; }
+  .purp button.on { background:var(--blue-d); color:#fff; border-color:var(--blue-d); }
+  .tgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:12px; }
+  .tcard { border:1px solid var(--line); border-radius:10px; overflow:hidden; cursor:pointer; background:#fff;
+           transition:transform .12s, box-shadow .12s, border-color .12s; }
+  .tcard:hover { transform:translateY(-2px); border-color:var(--blue); box-shadow:0 8px 22px rgba(48,76,134,.16); }
+  .tcard .img { aspect-ratio:4 / 3; display:grid; place-items:center; padding:6px; border-bottom:1px solid var(--rule); }
+  .tcard img { max-width:100%; max-height:100%; object-fit:contain; }
+  .tcard .cap { padding:8px 10px 10px; }
+  .tcard .cap b { display:block; }
+  .tcard .cap div { font-size:12px; color:var(--ink2); line-height:1.45; margin-top:2px; }
+  .wz { display:grid; grid-template-columns:minmax(360px, 1fr) minmax(380px, 1.15fr); gap:22px; }
+  .wz h4 { margin:14px 0 6px; }
+  .wz h4:first-child { margin-top:0; }
+  .form { display:grid; grid-template-columns:150px 1fr; gap:7px 10px; align-items:center; }
+  .form label { font-size:13px; }
+  .form input[type=text], .form input[type=number], .form select { width:100%; padding:5px 8px; border:1px solid var(--line); border-radius:6px; }
+  .form input[type=checkbox] { justify-self:start; width:16px; height:16px; }
+  .ttab { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
+  .ttab th, .ttab td { border:1px solid var(--line); padding:2px 6px; text-align:left; white-space:nowrap; max-width:140px; overflow:hidden; text-overflow:ellipsis; }
+  .ttab th { background:#fff; font-weight:700; }
+  .ttab th i { font-style:normal; font-weight:400; font-size:11px; color:var(--blue-d); margin-left:4px; }
+  .pv { border:1px solid var(--line); border-radius:10px; background:#fff; min-height:260px; display:grid; place-items:center; padding:10px; position:relative; }
+  .pv img { max-width:100%; max-height:52vh; }
+  .pv .busy { position:absolute; inset:0; background:rgba(255,255,255,.8); display:none; place-items:center; }
+  .pv.busy .busy { display:grid; }
+  .sizes { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .sizes button { padding:3px 10px; font-size:13px; }
+  .note { font-size:12.5px; color:var(--ink2); margin-top:6px; }
+  textarea.paste { width:100%; height:110px; font:12px Consolas, monospace; border:1px solid var(--line); border-radius:6px; padding:6px; margin-top:6px; }
   @media (max-width: 860px) { body { grid-template-columns:1fr; grid-template-rows:auto auto 1fr; } nav { max-height:34vh; border-right:none; border-bottom:1px solid var(--line); } .logo small { display:none; } }
 </style>
 </head>
@@ -254,6 +287,7 @@ function renderMain(p, q) {
   html += `<div class="head"><div class="x"><h1>${esc(p.name)}<button class="edit" id="rename" title="改名称">✎</button></h1>${p.subtitle ? `<div class="sub">${esc(p.subtitle)}</div>` : ""}
       <div class="path">${esc(v.roots.join("   ·   "))}</div></div>
       <div class="acts"><button id="reveal"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M1.5 4.5v8h13v-7H8L6.5 3.5h-5z"/></svg>打开文件夹</button>
+      <button id="newFig" title="选一种图表，导入数据，生成一张新的可编辑的图"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 14V2m0 12h12M5 11V8m3 3V5m3 6V7"/></svg>新建图表</button>
       <button class="primary" id="openFirst">打开编辑器 →</button></div></div>`;
   if (p.versions.length > 1) html += `<div class="vers">${shown.map(vbtn).join("")}${others.length ? `<select class="more" id="moreVer">
       <option value="">其他 ${others.length} 个版本…</option>${others.map(x => `<option value="${x.id}">${esc(x.name)} · ${esc(x.branch)} · ${esc(ago(x.mtime))}</option>`).join("")}</select>` : ""}</div>`;
@@ -274,6 +308,7 @@ function renderMain(p, q) {
   if ($("moreVer")) $("moreVer").onchange = e => e.target.value && pickVer(p, e.target.value);
   m.querySelectorAll(".card").forEach(c => c.onclick = () => openFig(v.id, c.dataset.f));
   $("openFirst").onclick = () => openFig(v.id, v.figs[0].id);
+  $("newFig").onclick = () => newFigure(p, v);
   $("reveal").onclick = () => fetch("/hub/reveal", { method: "POST", body: JSON.stringify({ version: v.id }) });
   $("rename").onclick = () => renamePaper(p);
 }
@@ -375,6 +410,159 @@ async function pollJob() {
   };
   refresh(false);
 }
+// ---- new figure from a chart template ----------------------------------------------------------------------------
+const nf = { cat: null, purpose: "", t: null, table: null, values: {}, paper: null, ver: null, w: 89, h: 62, png: null,
+             keep: { title: "", stem: "", label: "" } };
+async function newFigure(p, v) {
+  nf.paper = p; nf.ver = v;
+  if (!nf.cat) nf.cat = await fetch("/hub/templates").then(r => r.json());
+  galleryStep();
+}
+function galleryStep() {
+  const purposes = nf.cat.purposes, list = nf.cat.templates.filter(t => !nf.purpose || t.purpose === nf.purpose);
+  modal(`<h2>新建图表 · 选一种图</h2><div class="lead">${esc(nf.paper.name)} · ${esc(nf.ver.name)}　先按想表达的内容筛选，再点一种图。生成的是一个普通的作图脚本，之后在编辑器里照常微调。</div>
+    <div class="purp"><button data-p="" class="${nf.purpose ? "" : "on"}">全部 ${nf.cat.templates.length}</button>${purposes.map(([k, n]) =>
+      `<button data-p="${k}" class="${nf.purpose === k ? "on" : ""}">${esc(n)}</button>`).join("")}</div>
+    <div class="tgrid">${list.map(t => `<div class="tcard" data-t="${t.id}"><div class="img"><img src="/hub/template_thumb?id=${t.id}" alt=""></div>
+      <div class="cap"><b>${esc(t.name)}</b><div>${esc(t.when)}</div></div></div>`).join("")}</div>
+    <div class="foot"><button onclick="closeModal()">取消</button></div>`);
+  $("dlg").classList.add("wide");
+  document.querySelectorAll(".purp button").forEach(b => b.onclick = () => { nf.purpose = b.dataset.p; galleryStep(); });
+  document.querySelectorAll(".tcard").forEach(c => c.onclick = () => pickTemplate(c.dataset.t));
+}
+async function pickTemplate(id) {
+  nf.t = nf.cat.templates.find(t => t.id === id);
+  [nf.w, nf.h] = nf.t.size;
+  nf.values = Object.assign({}, nf.t.defaults);
+  nf.table = await fetch("/hub/template_sample?id=" + id).then(r => r.json());
+  nf.png = null;
+  nf.keep = { title: "", stem: suggestStem(), label: "" };
+  configStep();
+}
+const COLKINDS = ["text", "number", "text?", "number?"];
+function guessColumns() {
+  const cols = nf.table.columns, used = new Set();
+  const isNum = c => nf.table.numeric[cols.indexOf(c)];
+  for (const [key, , kind] of nf.t.fields) {
+    if (!COLKINDS.includes(kind)) continue;
+    if (kind.endsWith("?")) { nf.values[key] = ""; continue; }
+    const pick = cols.find(c => !used.has(c) && (kind === "number" ? isNum(c) : !isNum(c))) || cols.find(c => !used.has(c)) || cols[0];
+    nf.values[key] = pick; used.add(pick);
+  }
+  const first = ks => ks.map(k => nf.values[k]).find(Boolean) || "";
+  if ("XLABEL" in nf.values) nf.values.XLABEL = /bar|box|violin/.test(nf.t.id) ? "" : first(["X", "REF", "VALUE", "CHANGE", "EST", "A"]);
+  if ("YLABEL" in nf.values) nf.values.YLABEL = first(["Y", "PRED", "ENERGY", "VALUE"]);
+  for (const [key, , kind] of nf.t.fields) if (kind.startsWith("value:")) nf.values[key] = "";
+}
+function fieldHtml([key, label, kind]) {
+  const v = nf.values[key], cols = nf.table.columns;
+  if (COLKINDS.includes(kind)) {
+    const opt = kind.endsWith("?") ? `<option value="">（不选）</option>` : "";
+    return `<label>${esc(label)}</label><select data-k="${key}">${opt}${cols.map((c, i) =>
+      `<option value="${esc(c)}" ${c === v ? "selected" : ""}>${esc(c)}${nf.table.numeric[i] ? "　· 数值列" : ""}</option>`).join("")}</select>`;
+  }
+  if (kind === "bool") return `<label>${esc(label)}</label><input type="checkbox" data-k="${key}" ${v ? "checked" : ""}>`;
+  if (kind === "int" || kind === "float")
+    return `<label>${esc(label)}</label><input type="number" data-k="${key}" data-kind="${kind}" value="${esc(v)}" step="${kind === "int" ? 1 : 0.5}">`;
+  if (kind.startsWith("choice:")) {
+    const opts = kind.slice(7).split(",").map(x => x.split("="));
+    return `<label>${esc(label)}</label><select data-k="${key}">${opts.map(([val, name]) => `<option value="${esc(val)}" ${val === v ? "selected" : ""}>${esc(name)}</option>`).join("")}</select>`;
+  }
+  if (kind.startsWith("value:")) {
+    const i = cols.indexOf(nf.values[kind.slice(6)]);
+    const vals = i < 0 ? [] : [...new Set(nf.table.rows.map(r => r[i]).filter(Boolean))];
+    return `<label>${esc(label)}</label><select data-k="${key}"><option value="">（不突出）</option>${vals.map(x => `<option ${x === v ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>`;
+  }
+  return `<label>${esc(label)}</label><input type="text" data-k="${key}" value="${esc(v ?? "")}">`;
+}
+function tableHtml() {
+  const t = nf.table, rows = t.rows.slice(0, 6);
+  return `<table class="ttab"><tr>${t.columns.map((c, i) => `<th>${esc(c)}<i>${t.numeric[i] ? "数" : "文"}</i></th>`).join("")}</tr>
+    ${rows.map(r => `<tr>${r.map(x => `<td>${esc(x)}</td>`).join("")}</tr>`).join("")}</table>
+    <div class="note">${esc(t.name || "")}：${t.rows.length} 行 × ${t.columns.length} 列${t.rows.length > 6 ? "，只显示前 6 行" : ""}</div>`;
+}
+function configStep() {
+  const t = nf.t;
+  modal(`<h2>新建图表 · ${esc(t.name)}</h2><div class="lead">${esc(t.when)}　<b>数据要求：</b>${esc(t.data)}</div>
+    <div class="wz"><div>
+      <h4>1. 数据</h4><div class="row"><button id="nfPick">选择表格文件…</button><button id="nfPasteBtn">粘贴表格</button><button id="nfSample">用示例数据</button></div>
+      <textarea class="paste" id="nfPaste" style="display:none" placeholder="从 Excel 复制一块区域粘贴到这里（第一行是列名），再点「读入」"></textarea>
+      <div id="nfPasteGo" style="display:none;margin-top:6px"><button class="primary" id="nfRead">读入</button></div>
+      <div id="nfTable">${tableHtml()}</div>
+      <h4>2. 用哪几列、怎么画</h4><div class="form" id="nfForm">${t.fields.map(fieldHtml).join("")}</div>
+      <h4>3. 尺寸与名称</h4><div class="form">
+        <label>尺寸（mm）</label><div class="sizes"><button data-w="89">单栏 89</button><button data-w="120">1.5 栏 120</button><button data-w="183">双栏 183</button>
+          <input type="number" id="nfW" value="${nf.w}" style="width:68px"> × <input type="number" id="nfH" value="${nf.h}" style="width:68px"></div>
+        <label>图上的标题（可空）</label><input type="text" id="nfTitle" value="${esc(nf.keep.title)}">
+        <label>图名（文件名）</label><input type="text" id="nfStem" value="${esc(nf.keep.stem)}" placeholder="例如 FigS7">
+        <label>图号（可空）</label><input type="text" id="nfLabel" value="${esc(nf.keep.label)}" placeholder="例如 Supplementary Fig. 7">
+      </div></div>
+      <div><h4>预览</h4><div class="pv" id="nfPv"><img id="nfImg" src="${nf.png ? "data:image/png;base64," + nf.png : "/hub/template_thumb?id=" + t.id}" alt=""><div class="busy"><span class="spin"></span></div></div>
+        <div class="note" id="nfNote">${nf.png ? "" : "这是用示例数据画的样子。换了数据或设置后点「刷新预览」。"}</div>
+        <div class="row" style="margin-top:8px"><button id="nfPreview">刷新预览</button></div>
+        <pre id="nfLog" style="display:none"></pre>
+        <div class="note">生成在 ${esc(nf.ver.roots[0] || nf.ver.top)} 里，新建一个以图名命名的文件夹，内含 <code>make_图名.py</code> 和 <code>图名_data.csv</code>，用这篇论文自己的 style.py 出图。</div></div></div>
+    <div class="foot"><button id="nfBack">← 换一种图</button><button onclick="closeModal()">取消</button><button class="primary" id="nfGo">生成并打开编辑器</button></div>`);
+  $("dlg").classList.add("wide");
+  bindConfig();
+}
+function suggestStem() {
+  const have = new Set(nf.ver.figs.map(f => (f.stem || "").toLowerCase()));
+  for (let i = 1; i < 99; i++) { const s = "FigNew" + i; if (!have.has(s.toLowerCase())) return s; }
+  return "FigNew";
+}
+function readForm() {
+  document.querySelectorAll("#nfForm [data-k]").forEach(e => {
+    const k = e.dataset.k;
+    nf.values[k] = e.type === "checkbox" ? e.checked
+      : e.type === "number" ? (e.dataset.kind === "int" ? parseInt(e.value || "0", 10) : parseFloat(e.value || "0")) : e.value;
+  });
+  nf.w = parseFloat($("nfW").value) || nf.w; nf.h = parseFloat($("nfH").value) || nf.h;
+  nf.keep = { title: $("nfTitle").value, stem: $("nfStem").value, label: $("nfLabel").value };
+}
+function bindConfig() {
+  $("nfBack").onclick = () => { readForm(); galleryStep(); };
+  $("nfPasteBtn").onclick = () => { $("nfPaste").style.display = ""; $("nfPasteGo").style.display = ""; $("nfPaste").focus(); };
+  const loaded = t => {
+    if (!t.ok) { if (t.error) toast(t.error, true); return; }
+    readForm(); nf.table = t; nf.png = null; guessColumns(); configStep();
+    toast("已读入 " + t.rows.length + " 行；请核对每个设置对应的列，再刷新预览");
+  };
+  $("nfPick").onclick = async () => {
+    toast("请在弹出的窗口里选择表格文件");
+    loaded(await fetch("/hub/table", { method: "POST", body: JSON.stringify({ pick: true }) }).then(r => r.json()));
+  };
+  $("nfRead").onclick = async () => loaded(await fetch("/hub/table", { method: "POST", body: JSON.stringify({ text: $("nfPaste").value }) }).then(r => r.json()));
+  $("nfSample").onclick = () => pickTemplate(nf.t.id);
+  document.querySelectorAll(".sizes button").forEach(b => b.onclick = () => { $("nfW").value = b.dataset.w; });
+  document.querySelectorAll("#nfForm select[data-k]").forEach(e => e.onchange = () => { readForm(); configStep(); });
+  $("nfPreview").onclick = preview;
+  $("nfGo").onclick = create;
+}
+const nfBody = () => ({ version: nf.ver.id, template: nf.t.id, table: { columns: nf.table.columns, rows: nf.table.rows },
+                        values: nf.values, width: nf.w, height: nf.h, title: nf.keep.title,
+                        stem: nf.keep.stem.trim(), label: nf.keep.label.trim() });
+async function preview() {
+  readForm(); $("nfPv").classList.add("busy"); $("nfLog").style.display = "none";
+  const r = await fetch("/hub/template_preview", { method: "POST", body: JSON.stringify(nfBody()) }).then(r => r.json())
+    .catch(() => ({ ok: false, error: "编辑器服务没有响应" }));
+  $("nfPv").classList.remove("busy");
+  if (r.ok) { nf.png = r.png; $("nfImg").src = "data:image/png;base64," + r.png; $("nfNote").textContent = "用你的数据和" + r.style + "画的预览。"; }
+  else { $("nfLog").textContent = r.error || r.log || "预览失败"; $("nfLog").style.display = ""; toast("预览失败，见下方日志", true); }
+}
+async function create() {
+  readForm();
+  const b = nfBody();
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(b.stem)) { toast("图名只能用英文字母、数字和下划线，并以字母开头", true); $("nfStem").focus(); return; }
+  $("veilText").textContent = "正在生成并出图…"; $("veil").className = "on";
+  const r = await fetch("/hub/template_create", { method: "POST", body: JSON.stringify(b) }).then(r => r.json())
+    .catch(() => ({ ok: false, error: "编辑器服务没有响应" }));
+  $("veil").className = "";
+  if (r.ok) { location.href = "/edit"; return; }
+  toast(r.error || "生成失败", true);
+  if (r.log) { $("nfLog").textContent = r.log; $("nfLog").style.display = ""; }
+}
+
 $("onb").onclick = () => onboardStart();
 
 $("q").oninput = render;

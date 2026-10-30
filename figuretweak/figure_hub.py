@@ -28,10 +28,11 @@ from urllib.request import Request, urlopen
 
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))     # the exe unpacks its files here
 sys.path.insert(0, HERE)
+import chart_templates as ct  # noqa: E402
 import figure_tweak as ft  # noqa: E402
 import onboard  # noqa: E402
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 STATE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "figure_hub")
 # The paper registry: folders to scan and display names. The first that exists wins: the user's own file, a
 # figure-studio skill's projects/figure_papers.json next to this folder, then the default shipped with the program.
@@ -330,6 +331,9 @@ def dialog(kind, title, initial=None):
     tk.attributes("-topmost", True)
     if kind == "folder":
         path = filedialog.askdirectory(title=title, mustexist=True, initialdir=initial or None)
+    elif kind == "data":
+        path = filedialog.askopenfilename(title=title, initialdir=initial or None,
+                                          filetypes=[("表格（CSV、TSV、TXT）", "*.csv *.tsv *.txt"), ("所有文件", "*.*")])
     else:
         path = filedialog.askopenfilename(title=title, initialdir=initial or None,
                                           filetypes=[("python.exe", "python*.exe"), ("所有文件", "*.*")])
@@ -390,6 +394,69 @@ def thumb(keys_path, stem):
     return out, "image/png"
 
 
+# ---- new figures from chart templates (chart_templates.py) ----------------------------------------------------------
+
+def paper_python(v):
+    """The interpreter that draws this paper's figures: the one its figures were last rendered with, else the one
+    chosen at onboarding, else any found."""
+    cands = onboard.interpreters(v["roots"][0] if v["roots"] else v["top"])
+    py = load_json(CONFIG, {}).get("python")
+    return cands[0] if cands else (py if py and os.path.exists(py) else "")
+
+
+def template_job(st, req, preview):
+    """Render a template with the user's table: into a scratch folder (preview, returns the PNG) or as a new figure
+    of the paper (returns the figure's stem)."""
+    v = st["vermap"].get(req.get("version"))
+    if not v:
+        raise ValueError("先在左侧选一篇论文")
+    roots = [r for r in v["roots"] if os.path.isdir(r)] or [v["top"]]
+    python = paper_python(v)
+    if not python:
+        raise ValueError("没有找到装有 matplotlib 的 Python：先用「接入新论文」接入这篇论文")
+    tid, table = req["template"], dict(columns=req["table"]["columns"], rows=req["table"]["rows"])
+    size = [float(req.get("width") or 89), float(req.get("height") or 62)]
+    if not preview:
+        stem = (req.get("stem") or "").strip()
+        folder, log = ct.create(roots, tid, stem, table, req.get("values", {}), size[0], size[1],
+                                req.get("title", ""), python)
+        if not log.startswith("OK"):
+            return dict(ok=False, error="出图失败，脚本已留在 " + folder + "，可以改好后再出图", log=log)
+        if (req.get("label") or "").strip():           # the manuscript's number for the new figure
+            lp = os.path.join(roots[0], "figure_labels.json")
+            labels = load_json(lp, {})
+            labels[stem] = req["label"].strip()
+            with open(lp, "w", encoding="utf-8") as f:
+                json.dump(labels, f, ensure_ascii=False, indent=1)
+        add_scanned(st, v["top"])
+        err = open_figure(st, v["id"], want=stem)
+        return dict(ok=not err, error=err, folder=folder, log=log)
+    import base64
+    import shutil
+    import tempfile
+    home = st.setdefault("style_home", {}).get(v["id"], "?")
+    if home == "?":
+        home = st["style_home"][v["id"]] = ct.style_home(roots)
+    d = tempfile.mkdtemp(prefix="ft_preview_")
+    try:
+        if not home:
+            shutil.copy(os.path.join(HERE, "templates", "ft_style.py"), os.path.join(d, "style.py"))
+            shutil.copy(os.path.join(HERE, "tweak.py"), os.path.join(d, "tweak.py"))
+        ct.write_csv(table, os.path.join(d, "Preview_data.csv"))
+        script = os.path.join(d, "make_preview.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(ct.make_script(tid, "Preview", "Preview_data.csv", home or ".", size[0], size[1],
+                                   req.get("title", ""), req.get("values", {})))
+        log = ct.render(script, python)
+        png = os.path.join(d, "Preview.png")
+        if not log.startswith("OK") or not os.path.exists(png):
+            return dict(ok=False, log=log)
+        return dict(ok=True, png=base64.b64encode(open(png, "rb").read()).decode(), log=log,
+                    style="论文自己的 style.py" if home else "内置样式（这篇论文没有 Page）")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def make_handler(st):
     Base = ft.make_handler(st)
 
@@ -434,6 +501,20 @@ def make_handler(st):
                 return self.send(json.dumps(dict(papers=st["papers"], scanning=st["scanning"],
                                                  scan_time=st["scan_time"], current=self.current(),
                                                  last=cfg.get("last"), roots=registry()[0], version=__version__),
+                                            ensure_ascii=False))
+            if u.path == "/hub/templates":
+                cat = ct.catalog()
+                for t in cat["templates"]:
+                    t["defaults"] = ct.defaults(t["id"])
+                return self.send(json.dumps(cat, ensure_ascii=False))
+            if u.path == "/hub/template_thumb":
+                p = os.path.join(HERE, "templates", "thumbs", os.path.basename((q.get("id") or [""])[0]) + ".png")
+                if not os.path.exists(p):
+                    return self.send("no image", "text/plain", 404)
+                return self.send(open(p, "rb").read(), "image/png")
+            if u.path == "/hub/template_sample":
+                tid = os.path.basename((q.get("id") or [""])[0])
+                return self.send(json.dumps(dict(ct.parse_table(ct.sample(tid)), name="示例数据（%s）" % tid),
                                             ensure_ascii=False))
             if u.path == "/hub/onboard/job":
                 return self.send(json.dumps(st.get("job") or {}, ensure_ascii=False))
@@ -490,6 +571,24 @@ def make_handler(st):
                     return self.send(json.dumps({"ok": False, "error": "已有一个接入任务在运行"}, ensure_ascii=False))
                 start_onboard(st, req["path"], req.get("python", ""))
                 return self.send(json.dumps({"ok": True}))
+            if u.path == "/hub/table":                # a data table: picked, a path, or pasted text
+                try:
+                    path = req.get("path") or (dialog("data", "选择数据表（CSV / TSV，第一行是列名）") if req.get("pick")
+                                               else "")
+                    if req.get("pick") and not path:
+                        return self.send(json.dumps({"ok": False}))
+                    text = ct.read_data_file(path) if path else req.get("text", "")
+                    t = ct.parse_table(text)
+                except (OSError, ValueError) as e:
+                    return self.send(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+                return self.send(json.dumps(dict(t, ok=True, name=os.path.basename(path) if path else "粘贴的表格"),
+                                            ensure_ascii=False))
+            if u.path in ("/hub/template_preview", "/hub/template_create"):
+                try:
+                    out = template_job(st, req, u.path.endswith("preview"))
+                except (OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+                    out = {"ok": False, "error": str(e)}
+                return self.send(json.dumps(out, ensure_ascii=False))
             if u.path == "/hub/pick_python":
                 path = dialog("file", "选择装有 matplotlib 的 python.exe")
                 return self.send(json.dumps({"path": path.replace("/", "\\")}, ensure_ascii=False))

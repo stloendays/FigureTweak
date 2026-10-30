@@ -1,0 +1,13 @@
+state,energy,pathway
+N2 + 3H2,0.00,Ru(0001)
+N2*,-0.42,Ru(0001)
+TS N2 dissociation,0.95,Ru(0001)
+2N*,-1.05,Ru(0001)
+NH3*,-0.61,Ru(0001)
+NH3(g),-0.48,Ru(0001)
+N2 + 3H2,0.00,Fe(111)
+N2*,-0.71,Fe(111)
+TS N2 dissociation,0.42,Fe(111)
+2N*,-1.62,Fe(111)
+NH3*,-0.93,Fe(111)
+NH3(g),-0.48,Fe(111)

@@ -1,0 +1,7 @@
+variant,estimate,low,high
+main analysis,42.0,33.5,50.8
+leave one study out,40.3,31.0,49.6
+alternative prior,44.8,36.1,53.2
+wider error model,38.9,29.4,48.7
+restricted sample,46.1,35.2,56.4
+reweighted,41.2,32.8,49.9
