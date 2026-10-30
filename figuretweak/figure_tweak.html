@@ -98,6 +98,20 @@
   table.grid th { font-weight:700; }
   td.bad { color:var(--red); font-weight:700; }
   .ok { color:var(--green-d); font-weight:700; }
+  /* right-click menu */
+  #ctx { position:fixed; display:none; z-index:40; }
+  .cm { background:#fff; border:1px solid var(--line); box-shadow:0 8px 28px rgba(20,30,50,.22); padding:4px 0; min-width:190px; border-radius:6px; }
+  #ctx > .cm { position:relative; }
+  .cm .cm { position:absolute; display:none; }
+  .cm-row { position:relative; display:flex; align-items:center; gap:14px; padding:5px 14px; font-size:13px; cursor:pointer; white-space:nowrap; }
+  .cm-row:hover { background:var(--tint); }
+  .cm-row:hover > .cm { display:block; }
+  .cm-row.on { font-weight:700; color:var(--blue-d); }
+  .cm-row.danger { color:var(--red); }
+  .cm-key { margin-left:auto; color:#5f646c; font-size:12px; }
+  .cm-sep { height:1px; background:var(--rule); margin:4px 0; }
+  .cm-sw { display:grid; grid-template-columns:repeat(6, 22px); gap:5px; padding:6px 10px; }
+  .cm-sw .sw { width:22px; height:22px; }
   /* data dialog */
   .dlg.wide { width:min(1180px, 96vw); }
   .dwrap { max-height:46vh; overflow:auto; border:1px solid var(--rule); width:fit-content; max-width:100%; }
@@ -347,8 +361,8 @@ function viewCentreMm() {
   if (!(cx > 0 && cx < vb.width && cy > 0 && cy < vb.height)) { cx = vb.width / 2; cy = vb.height / 2; }
   return [+(cx * PT_MM).toFixed(1), +((vb.height - cy) * PT_MM).toFixed(1)];
 }
-function insert(type) {
-  const [cx, cy] = viewCentreMm(), key = "fig/added/" + Date.now().toString(36);
+function insert(type, at) {
+  const [cx, cy] = at || viewCentreMm(), key = "fig/added/" + Date.now().toString(36);
   const specs = {
     text: { type: "text", text: "Text", x_mm: cx - 5, y_mm: cy, size_pt: 7, color: "#1b1b1b" },
     arrow: { type: "arrow", x0_mm: cx - 8, y0_mm: cy + 4, x1_mm: cx + 8, y1_mm: cy - 4, head: "-|>", head_size: 6, lw: 0.8, ls: "-", color: "#1b1b1b" },
@@ -726,11 +740,13 @@ function drawLayers() {
       if (e.target.classList.contains("caret")) { open ? openGroups.delete(g.id) : openGroups.add(g.id); drawLayers(); return; }
       openGroups.add(g.id); select({ key: g.head ? g.head.key : "fig/figure", member: null }, e.shiftKey && g.head && g.head.kind === "axes");
     };
+    head.dataset.key = g.head && g.head.kind === "axes" ? g.head.key : "";
     L.appendChild(head);
     if (open) for (const it of g.kids) {
       const r = el("div", { class: "row" + (sel && sel.key === it.key ? " sel" : multi.has(it.key) ? " msel" : "") + (isHidden(it) ? " hidden" : ""),
                             html: `<span class="tag${it.kind === "shape" || it.added ? " shape" : ""}">${TAG[it.kind]}</span><span class="nm" title="${esc(it.key)}">${esc(dispName(it))}</span>` +
                                   (dirty(it.key) || stored[it.key] ? `<span class="dot" title="有调整"></span>` : "") + eyeHtml(it) });
+      r.dataset.key = it.key;
       r.onclick = e => { if (!e.target.classList.contains("eye")) { if (painter) { paintOnto(it.key); return; } select({ key: it.key, member: null }, e.shiftKey); } };
       L.appendChild(r);
     }
@@ -1161,7 +1177,7 @@ function drawProps() {
                        ["0°", 0, () => { push(); c.rotation = 0; afterEdit(); }]]);
       }
     }
-    if (["line", "patch", "collection", "scatter"].includes(it.kind) && it.ls !== undefined) lineProps(it, c);
+    if (["line", "patch", "collection", "scatter"].includes(it.kind) && it.ls !== undefined && it.lw_pt !== 0) lineProps(it, c);
     if (it.cmap) cmapProps(it, c);
     if (it.kind === "scatter" || LW.has(it.kind) || ALPHA.has(it.kind)) {
       const b = section(it.kind === "axes" ? "边框" : it.kind === "scatter" ? "点与线" : "线条与透明度");
@@ -1232,7 +1248,7 @@ function multiStyle(ks) {
     const r = el("input", { type: "range", min: 0.05, max: 1, step: 0.05 }); r.value = num(cur[lk[0]], "alpha", 1);
     r.onchange = () => { push(); lk.forEach(k => { if (+r.value === 1) delete curOf(k).alpha; else curOf(k).alpha = +r.value; }); afterEdit(false); };
     b.append(el("label", { text: "不透明度" }), r);
-    const ls = lk.filter(k => items[k].ls !== undefined);
+    const ls = lk.filter(k => items[k].ls !== undefined && items[k].lw_pt !== 0);
     if (ls.length) btnRow(b, "线型", [["实线", "-"], ["虚线", "--"], ["点线", ":"], ["点划线", "-."]].map(([t, v]) => [t, ls.every(k => (cur[k] || {}).ls === v),
       () => { push(); ls.forEach(k => { const c = curOf(k); if (v === (items[k].ls || "-")) delete c.ls; else c.ls = v; delete c.dash; }); afterEdit(); }]));
   }
@@ -1562,7 +1578,8 @@ function filesPage(body, src) {
 $("dataBtn").onclick = () => openData(sel ? sel.key : null);
 // ---- a new chart inside this figure: chart type, data, place ----------------------------------------------------
 const canInsert = () => String(meta.tweak_version || "") >= "1.4" && !meta.overlay;
-async function openInsertChart() {
+async function openInsertChart(at) {
+  if (!Array.isArray(at)) at = null;
   const D = $("dlg"); D.classList.add("wide"); $("modal").classList.add("open");
   if (!canInsert()) {
     D.innerHTML = "";
@@ -1608,7 +1625,7 @@ async function openInsertChart() {
       } })]));
   };
   const placeStep = (t, table) => {
-    const [W, H] = meta.size_mm || [180, 120], [cx, cy] = viewCentreMm();
+    const [W, H] = meta.size_mm || [180, 120], [cx, cy] = at || viewCentreMm();
     const w = Math.min(t.size[0], W * 0.6), h = Math.min(t.size[1], H * 0.6);
     const box = { x_mm: +Math.max(0, Math.min(W - w, cx - w / 2)).toFixed(1), y_mm: +Math.max(0, Math.min(H - h, cy - h / 2)).toFixed(1), w_mm: +w.toFixed(1), h_mm: +h.toFixed(1) };
     D.innerHTML = "";
@@ -1658,6 +1675,182 @@ async function upgradeNote(box) {                       // the paper's tweak.py 
       location.href = "/?onboard=" + encodeURIComponent(h.folder); } })
       : el("div", { text: "在论文调图的论文列表里点「接入新论文」，选这个文件夹即可升级。" })]));
 }
+
+// ---- right-click menu: the common operations on what is under the pointer --------------------------------------
+const PRESETS = [
+  ["期刊风", "无框线、刻度朝外、无网格", { frame: "open", tickdir: "out", grid: "none" }],
+  ["Origin 风", "四周框线、刻度朝内、有次刻度", { frame: "full", tickdir: "in", grid: "none", xminor: true, yminor: true }],
+  ["网格风", "无框线、刻度朝外、横向网格线", { frame: "open", tickdir: "out", grid: "y" }],
+  ["极简", "不画轴线和网格", { frame: "none", tickdir: "out", grid: "none" }]];
+let styleClip = null;
+const ctxMenu = el("div", { id: "ctx" });
+document.body.appendChild(ctxMenu);
+function mmAt(cx, cy) {                                 // screen px -> figure mm
+  const p = svg.createSVGPoint(); p.x = cx; p.y = cy;
+  const q = p.matrixTransform(svg.getScreenCTM().inverse());
+  return [+(q.x * PT_MM).toFixed(1), +((svg.viewBox.baseVal.height - q.y) * PT_MM).toFixed(1)];
+}
+function closeCtx() { ctxMenu.style.display = "none"; ctxMenu.innerHTML = ""; }
+function ctxList(defs) {
+  const ul = el("div", { class: "cm" });
+  for (const d of defs) {
+    if (!d) { ul.appendChild(el("div", { class: "cm-sep" })); continue; }
+    const row = el("div", { class: "cm-row" + (d.sub ? " has-sub" : "") + (d.danger ? " danger" : "") + (d.on ? " on" : ""), title: d.title || "" });
+    if (d.swatches) {
+      row.className = "cm-sw";
+      d.swatches.forEach(([c, n]) => row.appendChild(el("span", { class: "sw", title: n ? `${n} ${c}` : c, style: `background:${c}`, onclick: ev => { ev.stopPropagation(); closeCtx(); d.pick(c); } })));
+      ul.appendChild(row); continue;
+    }
+    row.appendChild(el("span", { text: d.label }));
+    if (d.key) row.appendChild(el("span", { class: "cm-key", text: d.key }));
+    if (d.sub) { row.appendChild(el("span", { class: "cm-key", text: "▸" })); row.appendChild(ctxList(d.sub)); }
+    else row.onclick = ev => { ev.stopPropagation(); closeCtx(); d.fn(); };
+    ul.appendChild(row);
+  }
+  return ul;
+}
+function openCtx(x, y, defs) {
+  ctxMenu.innerHTML = ""; ctxMenu.appendChild(ctxList(defs)); ctxMenu.style.display = "block";
+  const r = ctxMenu.getBoundingClientRect();
+  ctxMenu.style.left = Math.min(x, innerWidth - r.width - 6) + "px";
+  ctxMenu.style.top = Math.min(y, innerHeight - r.height - 6) + "px";
+  ctxMenu.querySelectorAll(".has-sub").forEach(row => row.onmouseenter = () => {   // sub-menus stay inside the window
+    const sub = row.querySelector(":scope > .cm"); if (!sub) return;
+    sub.style.left = "100%"; sub.style.right = ""; sub.style.top = "-4px";
+    const b = sub.getBoundingClientRect();
+    if (b.right > innerWidth) { sub.style.left = "auto"; sub.style.right = "100%"; }
+    if (b.bottom > innerHeight) sub.style.top = (innerHeight - b.bottom - 8) + "px";
+  });
+}
+document.addEventListener("pointerdown", e => { if (!ctxMenu.contains(e.target)) closeCtx(); }, true);
+window.addEventListener("blur", closeCtx);
+const paletteRows = () => {
+  const seen = new Set(), out = [];
+  for (const [n, c] of Object.entries(meta.style_palette || {})) if (!seen.has(c)) { seen.add(c); out.push([c, n]); }
+  for (const c of meta.palette || []) if (!seen.has(c)) { seen.add(c); out.push([c, ""]); }
+  return out.slice(0, 24);
+};
+function recolor(keys, nc) {                            // the main colour of each item to nc; series follow the scope
+  push();
+  for (const key of keys) {
+    const it = items[key]; if (!it) continue;
+    if (it.added || it.kind === "shape") { const c = curOf(key); c.add = Object.assign({}, c.add, { color: nc }); continue; }
+    const col = (it.colors || [])[0]; if (!col) continue;
+    const ax = SERIESY.has(it.kind) ? axesOf(key) : null;
+    const target = ax && colorScope === "chart" ? ax.key : ax && colorScope === "figure" ? "fig/figure" : key;
+    for (const k of [key].concat(ax ? [ax.key, "fig/figure"] : [])) if (k !== target && cur[k] && cur[k].colors) delete cur[k].colors[col];
+    const o = curOf(target); o.colors = Object.assign({}, o.colors || {});
+    if (nc === col) delete o.colors[col]; else o.colors[col] = nc;
+  }
+  afterEdit();
+}
+function setAll(keys, fn) { push(); keys.forEach(k => fn(curOf(k), items[k])); afterEdit(); }
+function chartPreset(axKey, p) { setAll([axKey], c => { ["frame", "tickdir", "grid", "xminor", "yminor"].forEach(k => delete c[k]); Object.assign(c, p); }); }
+function figPreset(p) {
+  setAll(["fig/figure"], c => { ["frame", "tickdir", "grid"].forEach(k => { if (p[k]) c[k] = p[k]; else delete c[k]; }); });
+  for (const it of Object.values(items)) if (it.kind === "axes" && cur[it.key]) ["frame", "tickdir", "grid"].forEach(k => delete cur[it.key][k]);
+  afterEdit();
+}
+function ctxFor(key, cx, cy) {
+  const it = key && items[key];
+  const keys = it && multi.has(key) && multi.size > 1 ? [...multi] : it ? [key] : [];
+  const many = keys.length > 1;
+  const defs = [];
+  if (!it) {                                            // empty canvas
+    const at = mmAt(cx, cy);
+    defs.push({ label: "在这里插入", sub: [["text", "文字"], ["arrow", "箭头"], ["line", "直线"], ["bracket", "显著性括号"], ["box", "圆角框"]]
+      .map(([t, n]) => ({ label: n, fn: () => insert(t, at) })).concat([{ label: "图表…", fn: () => openInsertChart(at) }]) });
+    defs.push({ label: "全图风格", sub: PRESETS.map(([n, t, p]) => ({ label: n, title: t, fn: () => figPreset(p) }))
+      .concat([null, { label: "去掉所有网格线", fn: () => setAll(["fig/figure"], c => c.grid = "none") }]) });
+    const hidden = Object.keys(cur).filter(k => cur[k].visible === false);
+    if (hidden.length) defs.push({ label: `显示所有隐藏的对象（${hidden.length}）`, fn: () => setAll(hidden, c => delete c.visible) });
+    defs.push(null, { label: "撤销", key: "Ctrl+Z", fn: undo }, { label: "重做", key: "Ctrl+Y", fn: redo });
+    if (dirtyKeys().length) defs.push({ label: "保存并重新出图", key: "Ctrl+S", fn: () => $("save").click() });
+    return defs;
+  }
+  const kinds = new Set(keys.map(k => items[k].kind));
+  const texty = keys.every(k => SIZED.has(items[k].kind) || items[k].added && items[k].kind === "text");
+  const stroked = keys.filter(k => ["line", "patch", "collection", "scatter"].includes(items[k].kind) && items[k].ls !== undefined && items[k].lw_pt !== 0);
+  const ax = !many ? (it.kind === "axes" ? it : axesOf(key)) : null;
+  if (!many && TEXTY.has(it.kind)) defs.push({ label: "编辑文字", key: "双击", fn: () => { select({ key, member: null });
+    setTimeout(() => { const t = document.querySelector("#props textarea"); if (t) { t.focus(); t.select(); } }, 0); } });
+  if (texty) defs.push({ label: "文字", sub: [
+    { label: "字号 +", fn: () => setAll(keys, c => c.size = num(c, "size", 1) * 1.1) },
+    { label: "字号 −", fn: () => setAll(keys, c => c.size = num(c, "size", 1) / 1.1) },
+    { label: "加粗 / 取消加粗", fn: () => { const on = keys.every(k => (cur[k] || {}).weight === "bold" || (!(cur[k] || {}).weight && items[k].weight === "bold")); setAll(keys, c => c.weight = on ? "normal" : "bold"); } },
+    { label: "斜体 / 取消斜体", fn: () => { const on = keys.every(k => (cur[k] || {}).style === "italic"); setAll(keys, c => c.style = on ? "normal" : "italic"); } }] });
+  if (keys.some(k => (items[k].colors || []).length || items[k].added))
+    defs.push({ label: SERIESY.has(it.kind) && !many ? `颜色（${({ one: "只改这一个", chart: "本图表同色一起改", figure: "全图同色一起改" })[colorScope]}）` : "颜色",
+      sub: [{ swatches: paletteRows(), pick: c => recolor(keys, c) }].concat(SERIESY.has(it.kind) && !many ? [null,
+        ...[["one", "只改这一个"], ["chart", "本图表同色一起改"], ["figure", "全图同色一起改"]].map(([v, n]) => ({ label: "范围：" + n, on: colorScope === v, fn: () => { colorScope = v; drawProps(); } }))] : []) });
+  if (stroked.length) defs.push({ label: "线型", sub: [["实线", "-"], ["虚线", "--"], ["点线", ":"], ["点划线", "-."]].map(([n, v]) => ({ label: n,
+    fn: () => setAll(stroked, (c, i) => { if (v === (i.ls || "-")) delete c.ls; else c.ls = v; delete c.dash; }) })) });
+  if (keys.some(k => LW.has(items[k].kind)))
+    defs.push({ label: "线宽", sub: [["细", 0.7], ["原样", 1], ["粗", 1.5], ["更粗", 2]].map(([n, f]) => ({ label: n,
+      fn: () => setAll(keys.filter(k => LW.has(items[k].kind)), c => { if (f === 1) delete c.lw; else c.lw = f; }) })) });
+  if (keys.some(k => ALPHA.has(items[k].kind)))
+    defs.push({ label: "不透明度", sub: [100, 75, 50, 25].map(p => ({ label: p + "%", fn: () => setAll(keys.filter(k => ALPHA.has(items[k].kind)), c => { if (p === 100) delete c.alpha; else c.alpha = p / 100; }) })) });
+  if (ax) {
+    const sub = PRESETS.map(([n, t, p]) => ({ label: "风格：" + n, title: t, fn: () => chartPreset(ax.key, p) }));
+    const g = (cur[ax.key] || {}).grid || (cur["fig/figure"] || {}).grid || ax.grid;
+    sub.push(null, { label: g === "none" ? "显示网格线（横线）" : "去掉网格线", fn: () => setAll([ax.key], c => c.grid = g === "none" ? "y" : "none") });
+    if (hasData() && ax.series) sub.push({ label: "查看 / 修改数据", fn: () => openData(ax.key) }, { label: "＋ 添加系列", fn: () => openAddSeries(ax) });
+    if (ax.inset) sub.push({ label: "改插入图表的数据和设置", fn: () => openChartEdit(ax.inset) });
+    defs.push({ label: ax.inset ? "这个插入的图表" : `图表 ${ax.panel || ""}`.trim(), sub });
+  }
+  if (!many && axesOf(key) && it.kind !== "axes")
+    defs.push({ label: `选中图表里所有的「${KINDS[it.kind]}」`, fn: () => { const a = axesOf(key);
+      const same = Object.values(items).filter(x => x.kind === it.kind && a && x.key.startsWith(a.prefix) && !isHidden(x)).map(x => x.key);
+      multi = new Set(same); sel = { key, member: null }; drawBoxes(); drawLayers(); drawProps(); setStatus(`已选中 ${same.length} 个${KINDS[it.kind]}`); } });
+  if (!many && (TEXTY.has(it.kind) || it.kind === "legend"))
+    defs.push({ label: "在图表里居中", sub: [
+      { label: "水平居中", fn: () => { const r = rectOf(key), p = parentRect(it); push(); moveMm(key, ((p.l + p.r) / 2 - (r.l + r.r) / 2) * pxToMm(), 0); afterEdit(); } },
+      { label: "垂直居中", fn: () => { const r = rectOf(key), p = parentRect(it); push(); moveMm(key, 0, -((p.t + p.b) / 2 - (r.t + r.b) / 2) * pxToMm()); afterEdit(); } }] });
+  if (many && keys.filter(k => MOVABLE.has(items[k].kind)).length > 1)
+    defs.push({ label: "对齐", sub: [["left", "左对齐"], ["hcenter", "水平居中"], ["right", "右对齐"], ["top", "顶对齐"], ["vcenter", "垂直居中"], ["bottom", "底对齐"], ["hdist", "水平等距"], ["vdist", "垂直等距"]]
+      .map(([m, n]) => ({ label: n, fn: () => alignSel(m) })) });
+  defs.push(null);
+  if (!many) defs.push({ label: "复制样式", fn: () => { styleClip = grabStyle(key); setStatus(`已复制“${dispName(it)}”的样式`); } });
+  if (styleClip) defs.push({ label: "粘贴样式", fn: () => { const keep = painter; painter = { from: null, style: styleClip }; keys.forEach(paintOnto); painter = keep; setStatus("已粘贴样式"); } });
+  defs.push({ label: "还原", title: "去掉对它做的全部调整", fn: () => setAll(keys, (c, i) => { const add = c.add; Object.keys(c).forEach(k => delete c[k]); if (i.added && add) c.add = clone((stored[i.key] || {}).add || add); }) });
+  const hide = keys.every(k => !isHidden(items[k]));
+  defs.push({ label: hide ? "隐藏" : "显示", fn: () => setAll(keys, c => { if (hide) c.visible = false; else delete c.visible; }) });
+  const removable = keys.filter(k => items[k].added || items[k].added_series || items[k].kind === "axes" && items[k].inset);
+  if (removable.length) defs.push({ label: "删除", key: "Delete", danger: true, fn: () => removeItems(removable) });
+  return defs;
+}
+function removeItems(keys) {                            // inserted texts and shapes, added series, inserted charts
+  push();
+  let save = false;
+  for (const k of keys) {
+    const it = items[k]; if (!it) continue;
+    if (it.added) { delete cur[k]; continue; }
+    if (it.added_series) {
+      const a = axesOf(k), sid = k.split("/").slice(-2)[0], c = a && cur[a.key];
+      if (c && c.series) { c.series = c.series.filter(s => String(s.id) !== sid); if (!c.series.length) delete c.series; save = true; }
+    } else if (it.inset) { delete cur[it.inset]; save = true; }
+  }
+  select(null); syncAdded(); afterEdit();
+  if (save) $("save").click();
+}
+stage.addEventListener("contextmenu", e => {
+  e.preventDefault();
+  if (drag) return;
+  const p = pick(e);
+  if (p && !multi.has(p.key)) select(p);
+  openCtx(e.clientX, e.clientY, ctxFor(p ? p.key : null, e.clientX, e.clientY));
+});
+$("layers").addEventListener("contextmenu", e => {
+  const row = e.target.closest(".row, .ghead"); if (!row) return;
+  e.preventDefault();
+  const k = row.dataset.key;
+  if (k && items[k] && !multi.has(k)) select({ key: k, member: null });
+  openCtx(e.clientX, e.clientY, ctxFor(k && items[k] ? k : null, e.clientX, e.clientY));
+});
+stage.addEventListener("dblclick", e => {               // double-click a text to edit it
+  const p = pick(e); if (!p || !TEXTY.has(items[p.key].kind)) return;
+  select(p); setTimeout(() => { const t = document.querySelector("#props textarea"); if (t) { t.focus(); t.select(); } }, 0);
+});
 
 // ---- consistency across figures ------------------------------------------------------------------------------------
 async function openConsistency() {
@@ -1847,13 +2040,17 @@ document.addEventListener("keydown", e => {
   const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); if (!$("save").disabled) $("save").click(); return; }
   if (typing) return;
+  if (e.key === "Escape" && ctxMenu.style.display === "block") { closeCtx(); return; }
   if (e.key === "Escape") { if ($("modal").classList.contains("open")) { $("modal").classList.remove("open"); return; } if (painter) { togglePainter(); return; } select(null); return; }
   if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))) { redo(); e.preventDefault(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { undo(); e.preventDefault(); return; }
   if (!sel) return;
   if (e.key === "Delete" || e.key === "Backspace") {
-    push(); for (const k of multi) { if (items[k].added) delete cur[k]; else curOf(k).visible = false; }
-    select(null); syncAdded(); afterEdit(); e.preventDefault(); return;
+    const rm = [...multi].filter(k => items[k].added || items[k].added_series || items[k].kind === "axes" && items[k].inset);
+    const hide = [...multi].filter(k => !rm.includes(k));
+    if (hide.length) { push(); hide.forEach(k => curOf(k).visible = false); }
+    if (rm.length) removeItems(rm); else { select(null); afterEdit(); }
+    e.preventDefault(); return;
   }
   if (e.key === "+" || e.key === "=") { scaleSel(1.05); e.preventDefault(); return; }
   if (e.key === "-" || e.key === "_") { scaleSel(1 / 1.05); e.preventDefault(); return; }

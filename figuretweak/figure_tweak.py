@@ -81,6 +81,18 @@ def resolve(figs, want):
     sys.exit("unknown figure %r; known: %s" % (want, ", ".join(l for _, l, _ in figs)))
 
 
+def repo_root(p):
+    """The nearest folder above p holding .git (a repository or a worktree), or None."""
+    d = os.path.abspath(p)
+    d = d if os.path.isdir(d) else os.path.dirname(d)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        if os.path.dirname(d) == d:
+            return None
+        d = os.path.dirname(d)
+
+
 class Fig:
     def __init__(self, fid, keys_path):
         self.id, self.stem, self.keys_path = fid, stem_of(keys_path), keys_path
@@ -116,6 +128,21 @@ class Fig:
         elif os.path.exists(p):
             os.remove(p)
 
+    def local(self, p):
+        """A path the keys file recorded, in this copy of the project. A figure folder copied from another git worktree
+        (or a renamed checkout) keeps the old copy's script in its keys until it is rendered again; rendering that
+        script would redraw the other copy and leave this one as it was."""
+        if not p:
+            return p
+        old, new = repo_root(p), repo_root(self.dir)
+        if old and new and os.path.normcase(old) != os.path.normcase(new):
+            q = os.path.join(new, os.path.relpath(p, old))
+            if os.path.exists(q):
+                return q
+        if not os.path.exists(p) and os.path.exists(os.path.join(self.dir, os.path.basename(p))):
+            return os.path.join(self.dir, os.path.basename(p))
+        return p
+
     def svg_text(self):
         """The SVG the editor shows: the figure's own render, or an external figure's source as is."""
         m = self.meta()
@@ -129,7 +156,7 @@ class Fig:
             return render_overlay(self)
         if not m.get("script"):
             return "ERROR\n%s has no render information; run its script once with the current tweak.py" % self.stem
-        r = subprocess.run([m["python"], m["script"]] + m.get("args", []), cwd=m.get("cwd") or self.dir,
+        r = subprocess.run([m["python"], self.local(m["script"])] + m.get("args", []), cwd=self.local(m.get("cwd")) or self.dir,
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))   # no console flash under pythonw
         out = (r.stdout + r.stderr).strip().splitlines()
@@ -282,7 +309,7 @@ def tweak_home(f):
     def version(p):
         m = re.search(r"""^TWEAK_VERSION\s*=\s*["']([\d.]+)""", open(p, encoding="utf-8").read(), re.M)
         return m.group(1) if m else "1.0"
-    d = os.path.dirname(f.meta().get("script") or "")
+    d = os.path.dirname(f.local(f.meta().get("script")) or "")
     for _ in range(5):
         p = os.path.join(d, "tweak.py")
         if os.path.isfile(p) and "def apply(fig, here, stem" in open(p, encoding="utf-8").read():
@@ -293,7 +320,7 @@ def tweak_home(f):
 
 def source_info(f):
     """The data behind a figure: a template figure's own table and settings, else the data files its script names."""
-    script = f.meta().get("script") or ""
+    script = f.local(f.meta().get("script")) or ""
     out = dict(template=None, files=[])
     if ct is None or not os.path.isfile(script):
         return out
@@ -312,7 +339,7 @@ def source_info(f):
 
 def save_source(f, req):
     """Write a template figure's table and settings (or switch it to another template), then re-render it."""
-    script = f.meta().get("script") or ""
+    script = f.local(f.meta().get("script")) or ""
     info = ct.script_info(script) if ct and os.path.isfile(script) else None
     if not info:
         return "ERROR\nthis figure was not made from a chart template"

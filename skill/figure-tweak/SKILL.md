@@ -139,6 +139,20 @@ A paper whose `tweak.py` predates 1.3 shows no plotted data: re-run 接入新论
 - A paper whose tweak.py is older than the editor's gets a note with an upgrade button on the canvas panel
   (`/tweak_home`; the button opens the hub's onboarding for that folder, which re-renders with the pixel check).
 
+## Right-click menu and copied worktrees (FigureTweak 1.5)
+
+- Right-click an object: colour (with the colour scope), line style, width, opacity, font size and weight, chart
+  style presets (期刊风 open frame / ticks out / no grid; Origin 风 full frame / ticks in / minor ticks; 网格风;
+  极简), grid on/off, data and added series, select every item of the same kind in the chart, copy / paste style,
+  restore, hide, delete. Right-click the empty canvas: insert text, arrow, line, bracket, box or a chart at that
+  point, or a style for the whole figure. Works on several selected items and on the layer list; double-click a text
+  to edit it. Delete removes inserted items, added series and inserted charts, and hides everything else.
+- **A figure folder copied from another worktree renders its own copy**: `Fig.local` maps the script and cwd recorded
+  in the keys file to the same place under this copy's git root. Before 1.5 the editor re-rendered the other
+  worktree's script, so saved edits never showed in this copy (2026-10-30: QoI rev13 keys pointed at rev12, and the
+  grid switched off in rev13 stayed on).
+- A dashed style on a stroke of width 0 (a band without an edge) is skipped; such items show no line-style section.
+
 ## figure_labels.json
 
 At the figures root, maps figures to the manuscript's numbers; its order is the order the editor lists them in.

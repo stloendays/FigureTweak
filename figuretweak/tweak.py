@@ -68,7 +68,7 @@ from matplotlib.ticker import (AutoMinorLocator, FixedLocator, Formatter, FuncFo
                                NullFormatter, NullLocator)
 from matplotlib.transforms import Affine2D, Bbox, ScaledTranslation, blended_transform_factory
 
-TWEAK_VERSION = "1.4"                                # onboarding replaces an older copy in a project
+TWEAK_VERSION = "1.5"                                # onboarding replaces an older copy in a project
 MM = 1 / 25.4
 PT_PER_MM = 72 * MM
 
@@ -391,7 +391,8 @@ def _ls_name(ls):
 
 def _style_line(a, tw):
     """ls ('-', '--', ':', '-.', 'none'), dash [on, off] in pt, marker, ms (pt), mew (pt), mfc ('none' for hollow)."""
-    if "ls" in tw or "dash" in tw:
+    widths = [a.get_linewidth()] if isinstance(a, Line2D) else list(np.atleast_1d(a.get_linewidth()))
+    if ("ls" in tw or "dash" in tw) and max(widths or [0]) > 0:   # a stroke of width 0 (a band's edge) has no dashes
         ls = tw.get("ls", "--" if "dash" in tw else "-")
         if ls == "--" and tw.get("dash"):
             lw = a.get_linewidth() if isinstance(a, Line2D) else (list(a.get_linewidths()) or [1])[0]
@@ -1321,6 +1322,7 @@ def apply(fig, here, stem, rerun_args=None):
         elif it["kind"] in ("patch", "collection", "scatter") and hasattr(a, "get_linestyle"):
             ls = a.get_linestyle()
             rec["ls"] = _ls_name(ls[0] if isinstance(ls, list) and ls else ls)
+            rec["lw_pt"] = round(float(max(np.atleast_1d(a.get_linewidth()), default=0)), 2)
         if it["kind"] in ("image", "collection", "scatter") and _is_mapped(a):
             rec.update(cmap=a.get_cmap().name, clim=[float(v) for v in a.get_clim()])
         if it["kind"] == "axes":
