@@ -1194,7 +1194,9 @@ const axesOf = key => Object.values(items).find(x => x.kind === "axes" && x.pref
 const cellVal = v => { const t = String(v ?? "").trim(); if (t === "") return ""; const n = Number(t.replace(/−/g, "-").replace(/,/g, "")); return isNaN(n) ? t : n; };
 function chartName(ax) {
   const charts = Object.values(items).filter(x => x.kind === "axes" && x.series);
-  return ax.panel ? `图表 ${ax.panel}` : charts.length > 1 ? `图表 ${charts.indexOf(ax) + 1}` : "图表";
+  if (!ax.panel) return charts.length > 1 ? `图表 ${charts.indexOf(ax) + 1}` : "图表";
+  const same = charts.filter(x => x.panel === ax.panel);             // a twin axis or an inset shares the letter
+  return `图表 ${ax.panel}` + (same.length > 1 && same.indexOf(ax) > 0 ? `（${same.indexOf(ax) + 1}）` : "");
 }
 function gridEditor(o) {                               // an editable table; pasting cells from Excel fills it
   const cols = o.cols.slice(), labels = (o.labels || o.cols).slice();

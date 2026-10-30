@@ -591,6 +591,7 @@ def _add_refs(ax, refs):
 # ---- the plotted data: read, replaced, and series added in the editor (FigureTweak 1.3) ----------------------------
 
 DATA_ROWS = 2000                                     # longer series are listed but not offered for editing
+DATA_CELLS = 30000                                   # values written per figure; later series are listed only
 
 
 def _num(v):
@@ -1240,7 +1241,7 @@ def apply(fig, here, stem, rerun_args=None):
     to_svg = 72.0 / fig.dpi
     items = _items(fig)
     axk = _axkeys(fig)
-    ids, palette = {}, Counter()
+    ids, palette, budget = {}, Counter(), [0]
     for it in items:                               # tag everything before anything changes
         a, gid = it["artist"], _gid(it["key"])
         rec = dict(key=it["key"], kind=it["kind"])
@@ -1299,8 +1300,11 @@ def apply(fig, here, stem, rerun_args=None):
             series = []                            # the plotted data, for the editor's data table
             for sid, kind, art in _script_series(a):
                 t = _series_table(a, kind, art)
-                if len(t["rows"]) > DATA_ROWS:
-                    t.update(rows=[], n=len(t["rows"]), too_long=True)
+                cells = sum(len(r) for r in t["rows"])
+                if len(t["rows"]) > DATA_ROWS or budget[0] + cells > DATA_CELLS:
+                    t = dict(name=t["name"], n=len(t["rows"]), rows=[], too_long=True)
+                else:
+                    budget[0] += cells
                 series.append(dict(sid=sid, kind=kind, **t))
             if series:
                 rec["series"] = series
@@ -1359,8 +1363,15 @@ def apply(fig, here, stem, rerun_args=None):
                 python=sys.executable, cwd=os.getcwd(), tweak_version=TWEAK_VERSION, size_mm=[round(v / MM, 2) for v in fig.get_size_inches()],
                 palette=[c for c, _ in palette.most_common()], style_palette=_style_palette(),
                 cmaps=_cmap_samples() if any("cmap" in v for v in ids.values()) else {})
-    json.dump(dict(meta=meta, ids=ids), open(os.path.join(here, stem + ".tweak_keys.json"), "w", encoding="utf-8"),
-              indent=0, ensure_ascii=False)
+    rows = {}                                      # each data series on one line, the rest one item per line
+    for rec in ids.values():
+        for i, t in enumerate(rec.get("series", [])):
+            tok = "@series%d@" % len(rows)
+            rows[tok], rec["series"][i] = json.dumps(t, ensure_ascii=False, separators=(",", ":")), tok
+    text = json.dumps(dict(meta=meta, ids=ids), indent=0, ensure_ascii=False)
+    for tok, r in rows.items():
+        text = text.replace('"%s"' % tok, r, 1)
+    open(os.path.join(here, stem + ".tweak_keys.json"), "w", encoding="utf-8").write(text)
     stale = sorted(set(tweaks) - used)
     if stale:
         print("tweaks: %d entr%s match no artist any more: %s" % (len(stale), "y" if len(stale) == 1 else "ies",
