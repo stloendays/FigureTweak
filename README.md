@@ -41,6 +41,12 @@ def save(self, here, stem, rerun_args=None):
 
 要点：SVG 文字保持为文字（`svg.fonttype: "none"`）；脚本里的文字串保持稳定（文字的键就是它的内容）；`*.tweaks.json` 和 `*.tweak_keys.json` 随图一起提交。
 
+不用 `Page` 也行：任何 matplotlib 写法（`plt.subplots`、subfigures、constrained/tight 布局、pandas 画图、双轴、极坐标、3D、内嵌图）只要在 `savefig` 前调用 `tweak.apply(fig, HERE, "FigS7")`，并按原尺寸保存（不用 `bbox_inches="tight"`）。写完跑一次自检，按提示改掉每条 ERROR：
+
+```
+python tweak.py --check <图文件夹> FigS7 --rerun
+```
+
 ## 给 AI 助手用的 skill
 
 [`skill/figure-tweak/SKILL.md`](skill/figure-tweak/SKILL.md)：让 Claude Code 等助手在写图脚本时保持图可编辑、帮你接入论文、排查编辑器问题。复制到 `~/.claude/skills/figure-tweak/` 即可。

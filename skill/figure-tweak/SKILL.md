@@ -51,6 +51,61 @@ Scripts that call `savefig` directly are listed, not changed. Convert them to a 
 - **Same base size for the same role** (panel letters, titles, axis titles, ticks, legends) across a paper's figures:
   the editor's consistency check (全稿一致性) compares them and can set one size for all outliers.
 - **Commit `<stem>.tweaks.json` and `<stem>.tweak_keys.json`** with the figure; they are part of it.
+- **Save the figure at its own size**: no `bbox_inches="tight"` (a cropped SVG puts the editor's overlay in the
+  wrong place); size the figure in mm instead. Save with `facecolor=fig.get_facecolor()`.
+- **Seed every random generator** (`np.random.default_rng(0)`): an unseeded script draws different text and data on
+  every render, and the hand edits drift.
+- **Run the script as a file** (`python make_fig.py`), not through `-c`, `exec` or a notebook: the keys file records
+  the script, and the editor re-renders by running it.
+
+## Figures written by an agent (FigureTweak 1.6)
+
+A new figure script, from a person or an agent, needs nothing beyond this to be editable. Any matplotlib layout works
+(a `Page`, `plt.subplots`, `subfigures`, constrained or tight layout, pandas plotting, twin, polar, 3D and inset
+axes); `tweak.apply` fixes the layout once it has run, so edits and dragged charts hold.
+
+```python
+import os, sys
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))          # the folder holding the paper's tweak.py (and style.py)
+import tweak
+
+STEM = "FigS7"
+plt.rcParams.update({"svg.fonttype": "none", "pdf.fonttype": 42})
+rng = np.random.default_rng(0)
+fig, ax = plt.subplots(figsize=(89 / 25.4, 60 / 25.4), layout="constrained")
+...                                                # draw; label= on every series, text as ax.text / annotate
+tweak.apply(fig, HERE, STEM)                       # right before saving
+for ext in ("svg", "pdf", "png"):
+    fig.savefig(os.path.join(HERE, "%s.%s" % (STEM, ext)), dpi=600, facecolor=fig.get_facecolor())
+```
+
+Then check it, and fix every ERROR before handing the figure over:
+
+```
+python <paper>/tweak.py --check <figure folder> <STEM> --rerun
+```
+
+The check reads the keys file and the SVG and, with `--rerun`, renders twice. It reports text saved as glyph
+outlines, a cropped SVG, a keys file that names a script in another worktree, a missing script, steps skipped while
+rendering, an older `tweak.py`, renders that differ (unseeded data), unnamed series and repeated strings, each with
+its fix. Exit code 1 means an ERROR.
+
+**A failing edit never stops a render** (1.6): a step that `tweak.apply` cannot carry out (an edit that does not fit
+an artist, an artist type it has not met) is skipped and named in the render log (`tweaks: skipped <key> (...)`) and
+in the keys file's `meta.problems`; the editor reports "N 处调整没能用上". Fix the cause rather than deleting the
+user's entry.
+
+Covered and tested by giving every keyed object every edit (scratch harness, 2026-10-31): grouped and horizontal
+bars with error bars and value labels, lines, steps, bands, spans, annotations, mathtext, scatter with colour bar,
+images, contour and contourf, log axes, histograms, twin axes, box and violin plots, categorical error bars, polar,
+3D, pie, stack plots, inset axes with hexbin, quiver, tables, drawn shapes, subfigures (keyed `fig/sub<i>/text/...`),
+pandas line/bar/area/scatter plots, pyplot-state scripts and several figures from one script.
 
 ## Frames and Origin-style axis tools (FigureTweak 1.1, tweak.py `TWEAK_VERSION = "1.1"`)
 
@@ -149,8 +204,8 @@ A paper whose `tweak.py` predates 1.3 shows no plotted data: re-run 接入新论
   to edit it. Delete removes inserted items, added series and inserted charts, and hides everything else.
 - **A figure folder copied from another worktree renders its own copy**: `Fig.local` maps the script and cwd recorded
   in the keys file to the same place under this copy's git root. Before 1.5 the editor re-rendered the other
-  worktree's script, so saved edits never showed in this copy (2026-10-30: QoI rev13 keys pointed at rev12, and the
-  grid switched off in rev13 stayed on).
+  worktree's script, so saved edits never showed in this copy (2026-10-30: a copy's keys pointed at the original worktree, and the
+  grid switched off in the copy stayed on).
 - A dashed style on a stroke of width 0 (a band without an edge) is skipped; such items show no line-style section.
 
 ## figure_labels.json

@@ -160,7 +160,8 @@ class Fig:
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))   # no console flash under pythonw
         out = (r.stdout + r.stderr).strip().splitlines()
-        return ("OK" if r.returncode == 0 else "ERROR %d" % r.returncode) + "\n" + "\n".join(out[-12:])
+        tw = [l for l in out[:-12] if l.startswith("tweaks: ")]   # what tweak.py reports is always kept
+        return ("OK" if r.returncode == 0 else "ERROR %d" % r.returncode) + "\n" + "\n".join(tw + out[-12:])
 
 
 # ---- external figures (Origin, R, any SVG or PNG): an annotation layer on top, exported as <stem>_annotated.* --------

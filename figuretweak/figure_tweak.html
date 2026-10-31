@@ -2070,7 +2070,9 @@ async function post(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
   drawLog.text = r.log;
   const stale = (r.log.match(/tweaks: (\d+) entr(?:y|ies) match no artist/) || [])[1];
-  lastWarn = !r.log.startsWith("OK") ? "出图出错，见右侧日志" : stale ? `已出图；${stale} 处调整找不到对象，见日志` : "";
+  const skipped = (r.log.match(/^tweaks: skipped /gm) || []).length;   // a step tweak.py could not apply; the figure is still drawn
+  lastWarn = !r.log.startsWith("OK") ? "出图出错，见右侧日志" : [stale ? `${stale} 处调整找不到对象` : "", skipped ? `${skipped} 处调整没能用上` : ""]
+    .filter(Boolean).map((s, i) => (i ? "" : "已出图；") + s).join("，") + (stale || skipped ? "，见日志" : "");
   await loadFigs(); await load();
   document.querySelectorAll("header button, header select").forEach(b => b.disabled = false);
   updateButtons(); drawProps();

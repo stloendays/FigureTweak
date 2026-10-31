@@ -68,7 +68,7 @@ from matplotlib.ticker import (AutoMinorLocator, FixedLocator, Formatter, FuncFo
                                NullFormatter, NullLocator)
 from matplotlib.transforms import Affine2D, Bbox, ScaledTranslation, blended_transform_factory
 
-TWEAK_VERSION = "1.5"                                # onboarding replaces an older copy in a project
+TWEAK_VERSION = "1.6"                                # onboarding replaces an older copy in a project
 MM = 1 / 25.4
 PT_PER_MM = 72 * MM
 
@@ -169,6 +169,23 @@ def _scale_lw(a, f):
 
 # ---- what can be adjusted ------------------------------------------------------------------------------------------
 
+def _subfigs(fig):
+    """The figure's subfigures (fig.subfigures), nested ones included, with a key prefix each: fig/sub0, fig/sub0/1..."""
+    out = []
+
+    def walk(f, prefix):
+        for i, sf in enumerate(getattr(f, "subfigs", None) or []):
+            out.append((sf, "%s%d" % (prefix, i)))
+            walk(sf, "%s%d/" % (prefix, i))
+    walk(fig, "fig/sub")
+    return out
+
+
+def _fig_texts(fig):
+    """Texts placed on the figure and on its subfigures (suptitles, panel letters, notes)."""
+    return list(fig.texts) + [t for sf, _ in _subfigs(fig) for t in sf.texts]
+
+
 def _axkeys(fig):
     W, H = fig.get_size_inches() / MM
     seen, out = Counter(), {}
@@ -247,6 +264,9 @@ def _items(fig):
 
     texts_of("fig", fig.texts, "text")
     legends_of("fig", fig.legends)
+    for sf, sk in _subfigs(fig):                       # subfigures: their own titles, texts and legends
+        texts_of(sk, sf.texts, "text")
+        legends_of(sk, sf.legends)
     axk = _axkeys(fig)
     panels = _panel_letters(fig, axk)
     for ax, ak in axk.items():
@@ -305,7 +325,7 @@ def _role(it):
     if it.get("added"):
         return "added"
     if it["kind"] == "text":
-        if it["key"].startswith("fig/text/"):
+        if it["key"].startswith("fig/text/") or it["key"].startswith("fig/sub") and "/text/" in it["key"]:
             s = it["artist"].get_text().strip()
             return "letter" if len(s) == 1 and s.isalpha() else "title"
         return "text"
@@ -395,7 +415,7 @@ def _style_line(a, tw):
     if ("ls" in tw or "dash" in tw) and max(widths or [0]) > 0:   # a stroke of width 0 (a band's edge) has no dashes
         ls = tw.get("ls", "--" if "dash" in tw else "-")
         if ls == "--" and tw.get("dash"):
-            lw = a.get_linewidth() if isinstance(a, Line2D) else (list(a.get_linewidths()) or [1])[0]
+            lw = widths[0] if widths else 1.0
             on, off = tw["dash"]
             scale = lw if matplotlib.rcParams["lines.scale_dashes"] and lw > 0 else 1.0   # dashes scale with lw
             a.set_linestyle((0, (on / scale, off / scale)))
@@ -717,7 +737,8 @@ def _script_series(ax):
 def _eb_xy(c):
     """x and y of an errorbar container: its data line, or the middles of its bars when drawn with fmt="none"."""
     if c[0] is not None:
-        return np.asarray(c[0].get_xdata(), dtype=float), np.asarray(c[0].get_ydata(), dtype=float)
+        return (np.asarray(c[0].get_xdata(orig=False), dtype=float),     # converted: category names are positions
+                np.asarray(c[0].get_ydata(orig=False), dtype=float))
     for lc in c[2] or ():
         segs = lc.get_segments()
         if segs and all(len(q) == 2 and abs(q[0][0] - q[1][0]) < 1e-12 for q in segs):
@@ -1198,6 +1219,40 @@ def _apply(fig, it, tw):
 
 # ---- entry point ---------------------------------------------------------------------------------------------------
 
+def _safely(fig, what, fn, *args):
+    """One step of applying the edits or keying the figure. A step that fails is reported (render log and the keys
+    file's meta.problems) and skipped; it never stops the figure. Scripts written by hand or by an agent draw things
+    this module has not met, and one odd artist or one stale edit must not cost the whole render."""
+    try:
+        return fn(*args)
+    except Exception as e:                             # noqa: BLE001
+        msg = "%s (%s: %s)" % (what, type(e).__name__, str(e).splitlines()[0][:200] if str(e) else "")
+        fig.__dict__.setdefault("_tw_problems", []).append(msg)
+        print("tweaks: skipped %s" % msg)
+        return None
+
+
+def _freeze_layout(fig):
+    """A figure laid out by constrained or tight layout gets that layout once, from the script's own drawing, and
+    keeps it. Without this the layout runs again on every draw: an edit that changes a tick label moves the charts,
+    their keys (positions in mm) change, and the edits no longer find them; charts dragged in the editor would also
+    snap back when the figure is saved."""
+    eng = fig.get_layout_engine() if hasattr(fig, "get_layout_engine") else None
+    if eng is not None and type(eng).__name__ != "PlaceHolderLayoutEngine":
+        fig.canvas.draw()
+        fig.set_layout_engine("none")
+    elif not hasattr(fig, "get_layout_engine") and (fig.get_constrained_layout() or fig.get_tight_layout()):
+        fig.canvas.draw()                              # matplotlib before 3.6
+        fig.set_constrained_layout(False)
+        fig.set_tight_layout(False)
+
+
+def _main_script():
+    """The script that drew the figure: __main__'s file (also right under runpy or a wrapper), else argv[0]."""
+    f = getattr(sys.modules.get("__main__"), "__file__", None) or (sys.argv[0] if sys.argv else "")
+    return os.path.abspath(f) if f and f != "-c" else ""
+
+
 def _style_palette():
     """Named hex colours of the project's style module, if one is loaded (shown as swatches in the editor)."""
     mod = sys.modules.get("style")
@@ -1220,13 +1275,14 @@ def _house_defaults(fig):
     near-white box without an edge). Boxes with an edge are drawn labels and stay. A weight or a box set in
     tweaks.json still wins, because the tweaks are applied afterwards."""
     from matplotlib import patheffects as pe
-    legends = [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None] + list(fig.legends)
+    legends = [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None] + list(fig.legends) + [
+        lg for sf, _ in _subfigs(fig) for lg in sf.legends]
     for lg in legends:
         for t in lg.get_texts():
             t.set_fontweight("bold")
         if lg.get_title() is not None and lg.get_title().get_text():
             lg.get_title().set_fontweight("bold")
-    for t in list(fig.texts) + [t for ax in fig.axes for t in ax.texts]:
+    for t in _fig_texts(fig) + [t for ax in fig.axes for t in ax.texts]:
         effects = t.get_path_effects() or []
         keep = [e for e in effects
                 if not (isinstance(e, pe.withStroke) and _near_white(e._gc.get("foreground", "black")))]
@@ -1247,22 +1303,28 @@ def apply(fig, here, stem, rerun_args=None):
     """Apply <stem>.tweaks.json to `fig` and write <stem>.tweak_keys.json. `rerun_args` are the command-line
     arguments that re-render only this figure (default: those of the current run)."""
     path = os.path.join(here, stem + ".tweaks.json")
-    tweaks = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+    fig._tw_problems = []
+    tweaks = (_safely(fig, "reading %s.tweaks.json" % stem, lambda: json.load(open(path, encoding="utf-8")))
+              if os.path.exists(path) else None) or {}
+    if not isinstance(tweaks, dict):
+        tweaks = {}
+    _safely(fig, "fixing the layout", _freeze_layout, fig)
     for k, v in sorted(tweaks.items()):            # charts inserted in the editor, first: they are edited like the rest
-        if k.startswith("fig/added/") and isinstance(v, dict) and (v.get("add") or {}).get("type") == "chart"                 and v.get("visible", True) is not False:
-            _draw_chart(fig, k, v, here)
+        if k.startswith("fig/added/") and isinstance(v, dict) and (v.get("add") or {}).get("type") == "chart" \
+                and v.get("visible", True) is not False:
+            _safely(fig, k, _draw_chart, fig, k, v, here)
     for ax, ak in _axkeys(fig).items():            # plotted values replaced and series added in the editor
         tw = tweaks.get(ak + "/axes") or {}
-        if tw.get("data") or tw.get("series"):
-            _data_layer(ax, ak, tw)
-    _house_defaults(fig)                           # bold legends, no masking text backgrounds
+        if isinstance(tw, dict) and (tw.get("data") or tw.get("series")):
+            _safely(fig, ak + " data", _data_layer, ax, ak, tw)
+    _safely(fig, "house defaults", _house_defaults, fig)   # bold legends, no masking text backgrounds
     for k, v in sorted(tweaks.items()):            # texts and shapes inserted in the editor
         if k.startswith("fig/added/") and isinstance(v, dict) and v.get("add") and v["add"].get("type") != "chart":
-            _make_added(fig, k, v)
+            _safely(fig, k, _make_added, fig, k, v)
     for ax, ak in _axkeys(fig).items():            # axis ranges, scales and ticks first: the keys see the new ticks
         tw = tweaks.get(ak + "/axes") or {}
-        if any(k in tw for k in STRUCT):
-            _axis_structure(ax, tw)
+        if isinstance(tw, dict) and any(k in tw for k in STRUCT):
+            _safely(fig, ak + " axis", _axis_structure, ax, tw)
     fig.canvas.draw()                              # lays out ticks and legends so they can be keyed and tagged
     renderer = fig.canvas.get_renderer()
     H_pt = fig.get_size_inches()[1] * 72
@@ -1270,7 +1332,8 @@ def apply(fig, here, stem, rerun_args=None):
     items = _items(fig)
     axk = _axkeys(fig)
     ids, palette, budget = {}, Counter(), [0]
-    for it in items:                               # tag everything before anything changes
+
+    def key_one(it):
         a, gid = it["artist"], _gid(it["key"])
         rec = dict(key=it["key"], kind=it["kind"])
         if it.get("added"):
@@ -1363,15 +1426,23 @@ def apply(fig, here, stem, rerun_args=None):
         if it["kind"] == "figure":
             palette.update(_colors_of(fig))
         ids[gid] = rec
-    used = set()
+        return rec
+
+    for it in items:                               # tag everything before anything changes
+        if _safely(fig, "keying " + it["key"], key_one, it) is None and _gid(it["key"]) not in ids:
+            ids[_gid(it["key"])] = dict(key=it["key"], kind=it["kind"])
+    used, failed = set(), set()
     for it in items:                               # element-level first, then the figure-wide colour swap
         tw = tweaks.get(it["key"])
-        if tw:
+        if tw and isinstance(tw, dict):
             used.add(it["key"])
-            _apply(fig, it, tw)
-    _follow_colorbars(fig, tweaks, axk)
+            if _safely(fig, it["key"], lambda: _apply(fig, it, tw) or True) is None:
+                failed.add(it["key"])
+    _safely(fig, "colour bars", _follow_colorbars, fig, tweaks, axk)
     fw = tweaks.get("fig/figure") or {}            # figure-wide frame, tick direction and text borders
-    for it in items:
+    fw = fw if isinstance(fw, dict) else {}
+
+    def figure_wide(it):
         own = tweaks.get(it["key"]) or {}
         if it["kind"] == "axes":
             if fw.get("frame") and "frame" not in own:
@@ -1383,27 +1454,36 @@ def apply(fig, here, stem, rerun_args=None):
         elif it["kind"] in ("text", "axislabel") and fw.get("textbox") == "none" and "border" not in own:
             _set_border(it["artist"], False)
             _drop_masking_box(it["artist"])        # a borderless white box is the masking background the defaults remove
+
+    for it in items:
+        if fw:
+            _safely(fig, "fig/figure on " + it["key"], figure_wide, it)
     W_pt, H_pt2 = fig.get_size_inches() * 72
-    for ax, ak in axk.items():                     # where each chart ends up, for the editor's data reader
-        rec = ids.get(_gid(ak + "/axes"))
-        if rec is None or "xlim" not in rec:
-            continue
+
+    def where(ax, rec):
         try:
             ax.apply_aspect()
-        except Exception:
+        except Exception:                          # noqa: BLE001
             pass
         x0, y0, x1, y1 = ax.get_position().extents
         rec["box"] = [round(x0 * W_pt, 2), round((1 - y1) * H_pt2, 2), round(x1 * W_pt, 2), round((1 - y0) * H_pt2, 2)]
         rec.update(xlim=[float(v) for v in ax.get_xlim()], ylim=[float(v) for v in ax.get_ylim()],
                    xscale=ax.get_xscale(), yscale=ax.get_yscale())
-    gm = (tweaks.get("fig/figure") or {}).get("colors")
+
+    for ax, ak in axk.items():                     # where each chart ends up, for the editor's data reader
+        rec = ids.get(_gid(ak + "/axes"))
+        if rec is not None and "xlim" in rec:
+            _safely(fig, ak + " position", where, ax, rec)
+    gm = fw.get("colors")
     if gm:
-        _recolor(fig, {k.lower(): v for k, v in gm.items()})
-    meta = dict(stem=stem, script=os.path.abspath(sys.argv[0]),
+        _safely(fig, "fig/figure colours", _recolor, fig, {k.lower(): v for k, v in gm.items()})
+    meta = dict(stem=stem, script=_main_script(),
                 args=[str(x) for x in (sys.argv[1:] if rerun_args is None else rerun_args)],
                 python=sys.executable, cwd=os.getcwd(), tweak_version=TWEAK_VERSION, size_mm=[round(v / MM, 2) for v in fig.get_size_inches()],
                 palette=[c for c, _ in palette.most_common()], style_palette=_style_palette(),
                 cmaps=_cmap_samples() if any("cmap" in v for v in ids.values()) else {})
+    if fig._tw_problems:                           # the editor lists these after a render
+        meta["problems"] = fig._tw_problems
     rows = {}                                      # each data series on one line, the rest one item per line
     for rec in ids.values():
         for i, t in enumerate(rec.get("series", [])):
@@ -1414,10 +1494,127 @@ def apply(fig, here, stem, rerun_args=None):
         text = text.replace('"%s"' % tok, r, 1)
     open(os.path.join(here, stem + ".tweak_keys.json"), "w", encoding="utf-8").write(text)
     used |= getattr(fig, "_tw_charts", set())
-    stale = sorted(set(tweaks) - used)
+    used -= failed
+    stale = sorted(set(tweaks) - used - failed)
     if stale:
         print("tweaks: %d entr%s match no artist any more: %s" % (len(stale), "y" if len(stale) == 1 else "ies",
                                                                   "; ".join(stale)))
     if used:
         print("tweaks: applied %d hand adjustment%s from %s.tweaks.json" % (len(used), "" if len(used) == 1 else "s",
                                                                             stem))
+
+
+# ---- checking a figure script ---------------------------------------------------------------------------------------
+
+def _git_root(p):
+    d = os.path.dirname(os.path.abspath(p)) if os.path.isfile(p) else os.path.abspath(p)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return os.path.normcase(d)
+        up = os.path.dirname(d)
+        if up == d:
+            return None
+        d = up
+
+
+def check(here, stem, rerun=False):
+    """What stands between a figure and editing it in FigureTweak, with the fix for each finding. Returns the
+    findings as (level, text): "error" (the editor cannot work on it), "warn" (some edits will not hold)."""
+    import re
+    import subprocess
+    out, here = [], os.path.abspath(here)
+    keys_p = os.path.join(here, stem + ".tweak_keys.json")
+    if not os.path.exists(keys_p):
+        return [("error", "%s.tweak_keys.json is missing: the script never reached tweak.apply(fig, HERE, %r). Call it "
+                          "right before savefig (Page.save does), then render once." % (stem, stem))]
+    keys = json.load(open(keys_p, encoding="utf-8"))
+    meta, ids = keys.get("meta", {}), keys.get("ids", {})
+    if str(meta.get("tweak_version", "0")) < TWEAK_VERSION:
+        out.append(("warn", "rendered with tweak.py %s; this is %s. Copy this tweak.py next to the paper's style.py "
+                            "(or onboard the folder again) and re-render." % (meta.get("tweak_version"), TWEAK_VERSION)))
+    script = meta.get("script") or ""
+    if not script or not os.path.isfile(script):
+        out.append(("error", "the recorded script %r does not exist, so the editor cannot re-render. Run the figure "
+                             "script as a file (python make_fig.py), not through -c, a notebook or exec." % script))
+    elif (_git_root(script) != _git_root(keys_p) if _git_root(script) or _git_root(keys_p) else not (
+            os.path.normcase(here).startswith(os.path.normcase(os.path.dirname(script)))
+            or os.path.normcase(os.path.dirname(script)).startswith(os.path.normcase(here)))):
+        out.append(("warn", "the keys file names a script in another folder or worktree (%s); it was copied. Render "
+                            "this copy's own script once so the editor re-renders the right one." % script))
+    for p in meta.get("problems") or []:
+        out.append(("warn", "a step was skipped while rendering: %s" % p))
+    texts = [r for r in ids.values() if r.get("kind") in ("text", "axislabel") and "member" not in r]
+    svg_p = os.path.join(here, stem + ".svg")
+    if os.path.exists(svg_p):
+        svg = open(svg_p, encoding="utf-8", errors="replace").read()
+        if texts and "<text" not in svg:
+            out.append(("error", "the SVG holds no text elements: text was saved as glyph outlines, so no text can be "
+                                 "edited. Set rcParams['svg.fonttype'] = 'none' before drawing."))
+        m = re.search(r'<svg[^>]*\bwidth="([\d.]+)pt"[^>]*\bheight="([\d.]+)pt"', svg)
+        if m and meta.get("size_mm"):
+            w_mm, h_mm = float(m.group(1)) / 72 * 25.4, float(m.group(2)) / 72 * 25.4
+            if abs(w_mm - meta["size_mm"][0]) > 1 or abs(h_mm - meta["size_mm"][1]) > 1:
+                out.append(("error", "the SVG is %.0f x %.0f mm but the figure is %.0f x %.0f mm: it was cropped "
+                                     "(savefig bbox_inches='tight' or pad_inches), so the editor's overlay lands in "
+                                     "the wrong place. Save without bbox_inches; size the figure itself."
+                            % (w_mm, h_mm, meta["size_mm"][0], meta["size_mm"][1])))
+    else:
+        out.append(("error", "%s.svg is missing: the editor shows the SVG. Save svg next to the png." % stem))
+    if script and os.path.isfile(script):
+        src = open(script, encoding="utf-8", errors="replace").read()
+        if re.search(r"""bbox_inches\s*=\s*["']tight""", src) and not any("cropped" in t for _, t in out):
+            out.append(("warn", "the script saves with bbox_inches='tight'; if the SVG gets cropped the editor's "
+                                "overlay shifts. Size the figure instead."))
+        if re.search(r"savefig\(.*facecolor\s*=\s*['\"]", src):
+            out.append(("warn", "savefig(facecolor='...') overrides a background set in the editor; use "
+                                "facecolor=fig.get_facecolor()."))
+    unnamed = [t for r in ids.values() for t in r.get("series") or [] if isinstance(t, dict)
+               and t.get("kind") in ("line", "scatter") and not t.get("name") and max(len(t.get("rows") or []),
+                                                                                    t.get("n", 0)) >= 4]
+    if len(unnamed) > 3:
+        out.append(("warn", "%d lines/point sets have no label=, so the layer list shows them as 'line 3', "
+                            "'scatter 0'. Give each series a label= (legend=False keeps it out of the legend)."
+                    % len(unnamed)))
+    dup = sorted({r["key"].rsplit("#", 1)[0] for r in texts if re.search(r"#\d+$", r["key"])
+                  and isinstance(_num(r["key"].rsplit("#", 1)[0].split("/text/", 1)[-1].replace("−", "-")), str)})
+    if dup:
+        out.append(("warn", "the same string is drawn more than once (%s); those texts are told apart only by "
+                            "drawing order, so reordering the script moves their edits. Prefer one text per string."
+                    % ", ".join(k.split("/text/", 1)[-1] for k in dup[:5])))
+    if rerun and script and os.path.isfile(script):
+        import hashlib as _h
+
+        def render():
+            subprocess.run([meta.get("python") or sys.executable, script] + list(meta.get("args") or []),
+                           cwd=meta.get("cwd") or os.path.dirname(script), capture_output=True)
+            k = json.load(open(keys_p, encoding="utf-8"))
+            png = os.path.join(here, stem + ".png")
+            return ({r["key"] for r in k["ids"].values()},
+                    _h.md5(open(png, "rb").read()).hexdigest() if os.path.exists(png) else None)
+        (k1, h1), (k2, h2) = render(), render()
+        if k1 != k2:
+            out.append(("error", "two renders give different keys (%d differ, e.g. %s): the script is not "
+                                 "deterministic (unseeded random data, set or dict order, timestamps in text), and "
+                                 "edits will drift. Seed every generator (np.random.default_rng(0)) and keep text "
+                                 "stable." % (len(k1 ^ k2), sorted(k1 ^ k2)[:3])))
+        elif h1 != h2:
+            out.append(("warn", "two renders give different PNGs with the same keys: something random is drawn. "
+                                "Seed the generators so a re-render shows only the hand edits."))
+    return out
+
+
+def _main(argv):
+    """python tweak.py --check FOLDER STEM [--rerun]: what keeps the figure from being edited in FigureTweak."""
+    if len(argv) >= 3 and argv[0] == "--check":
+        res = check(argv[1], argv[2], rerun="--rerun" in argv)
+        for lvl, t in res:
+            print("%-5s %s" % (lvl.upper(), t))
+        print("OK    %s is ready for FigureTweak" % argv[2] if not res else
+              "%d finding%s" % (len(res), "" if len(res) == 1 else "s"))
+        return 1 if any(lvl == "error" for lvl, _ in res) else 0
+    print(_main.__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))
