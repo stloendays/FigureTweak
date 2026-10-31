@@ -239,5 +239,9 @@ get their own sections.
 | Edits vanished after a rerun | The text string changed in the script; re-key the entry in `<stem>.tweaks.json` |
 | Background colour from the editor not kept | `savefig(facecolor="white")` literal; use `self.fig.get_facecolor()` |
 | Re-render fails in the editor | The render log (出图日志) shows the script's last lines; the command is in `<stem>.tweak_keys.json` → `meta` |
+| Status says 另一个窗口已打开 … and nothing saved (1.7) | One editor server holds one current figure; another tab or the start page opened a different one. Refresh the page; the unsaved edits of the old tab are lost, so redo them there |
+| Editor exits with "port … is in use" (1.7) | Another copy is already running on that port; use it, or close it. Before 1.7 Windows let two copies share the port and requests went to either at random |
+| Render stopped after 900 s, or a script that used to open a window | The editor renders with `MPLBACKEND=Agg` and a time limit; a `plt.show()` no longer blocks. A script that genuinely takes longer must be split or cached |
+| 全部还原 by mistake | The previous edits are in `<stem>.tweaks.json.bak`; rename it back and re-render |
 
 Verify a change to a figure script by rerendering and comparing the PNG pixel by pixel with the previous one.

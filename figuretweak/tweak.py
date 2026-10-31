@@ -68,7 +68,7 @@ from matplotlib.ticker import (AutoMinorLocator, FixedLocator, Formatter, FuncFo
                                NullFormatter, NullLocator)
 from matplotlib.transforms import Affine2D, Bbox, ScaledTranslation, blended_transform_factory
 
-TWEAK_VERSION = "1.6"                                # onboarding replaces an older copy in a project
+TWEAK_VERSION = "1.7"                                # onboarding replaces an older copy in a project
 MM = 1 / 25.4
 PT_PER_MM = 72 * MM
 
@@ -237,6 +237,23 @@ def _drawn_tick_labels(axis):
 def _name(a):
     lab = a.get_label() if hasattr(a, "get_label") else ""
     return lab if lab and not lab.startswith("_") else ""
+
+
+def _bar_name(p):
+    """A bar's layer name: its category (and its series' label when the chart has several), e.g. 'Fe' or 'catalyst A · Fe'."""
+    ax = getattr(p, "axes", None)
+    if ax is None:
+        return ""
+    bcs = [c for c in ax.containers if isinstance(c, BarContainer) and c.patches]
+    for c in bcs:
+        if p in c.patches:
+            horiz = getattr(c, "orientation", None) == "horizontal"
+            mid = p.get_y() + p.get_height() / 2 if horiz else p.get_x() + p.get_width() / 2
+            cat = _axis_value(ax.yaxis if horiz else ax.xaxis, mid, near=True)
+            cat = cat if isinstance(cat, str) else ""
+            lab = c.get_label() if len(bcs) > 1 and not str(c.get_label()).startswith("_") else ""
+            return " · ".join(x for x in (lab, cat) if x)
+    return ""
 
 
 def _items(fig):
@@ -1188,10 +1205,13 @@ def _apply(fig, it, tw):
             kw["labelsize"] = it["members"][0].get_fontsize() * size
         if "rotation" in tw:
             kw["labelrotation"] = tw["rotation"]
-        if tw.get("weight"):
+        if tw.get("weight") or tw.get("style"):
             for t in axis.get_major_ticks():
-                t.label1.set_fontweight(tw["weight"])
-                t.label2.set_fontweight(tw["weight"])
+                for lab in (t.label1, t.label2):
+                    if tw.get("weight"):
+                        lab.set_fontweight(tw["weight"])
+                    if tw.get("style"):
+                        lab.set_fontstyle(tw["style"])
         if tw.get("visible") is False:
             kw.update(label1On=False, label2On=False)
         if kw:
@@ -1205,6 +1225,8 @@ def _apply(fig, it, tw):
                 t.set_fontsize(t.get_fontsize() * size)
             if tw.get("weight"):
                 t.set_fontweight(tw["weight"])
+            if tw.get("style"):
+                t.set_fontstyle(tw["style"])
         if "frame" in tw:
             a.set_frame_on(bool(tw["frame"]))
         if tw.get("loc"):
@@ -1339,7 +1361,7 @@ def apply(fig, here, stem, rerun_args=None):
         if it.get("added"):
             rec["added"] = True
         if isinstance(a, Text):
-            rec.update(rotation=round(a.get_rotation(), 2), ha=a.get_horizontalalignment())
+            rec.update(rotation=round(a.get_rotation(), 2), ha=a.get_horizontalalignment(), va=a.get_verticalalignment())
         font = _font_of(it)
         if font:                                   # base font, for the format painter and the consistency check
             rec.update(fontsize=round(font.get_fontsize(), 2), weight=_weight(font.get_fontweight()),
@@ -1370,6 +1392,8 @@ def apply(fig, here, stem, rerun_args=None):
             rec.update(frame=bool(a.get_frame_on()))
         if it["kind"] in ("ticks", "legend"):
             rec.update({k: it[k] for k in ("axis", "side") if k in it})
+            if it["kind"] == "ticks" and it.get("members"):   # the script's label rotation; the editor's field starts here
+                rec["rotation"] = round(it["members"][0].get_rotation(), 2)
             for j, m in enumerate(it.get("members", [])):
                 mid = "%s_%d" % (gid, j)
                 m.set_gid(mid)
@@ -1418,6 +1442,8 @@ def apply(fig, here, stem, rerun_args=None):
             if parent is not None and parent in axk:
                 rec.update(colorbar_of=axk[parent] + "/axes", cb_orient=a._colorbar.orientation)
         name = _name(a) if it["kind"] not in ("figure", "axes", "ticks") else ""
+        if not name and it["kind"] == "patch":
+            name = _bar_name(a)
         if name:
             rec["name"] = name
         cols = _colors_of(a) if it["kind"] != "figure" else []

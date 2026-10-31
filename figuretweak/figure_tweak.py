@@ -17,7 +17,9 @@ import base64
 import glob
 import json
 import os
+import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -26,6 +28,7 @@ import webbrowser
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import quote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKIP = (os.sep + ".git" + os.sep, os.sep + "node_modules" + os.sep)
@@ -93,6 +96,9 @@ def repo_root(p):
         d = os.path.dirname(d)
 
 
+RENDER_TIMEOUT = 900
+
+
 class Fig:
     def __init__(self, fid, keys_path):
         self.id, self.stem, self.keys_path = fid, stem_of(keys_path), keys_path
@@ -126,6 +132,7 @@ class Fig:
         if clean:
             json.dump(clean, open(p, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
         elif os.path.exists(p):
+            shutil.copy2(p, p + ".bak")                    # 全部还原 can be undone by hand
             os.remove(p)
 
     def local(self, p):
@@ -156,9 +163,17 @@ class Fig:
             return render_overlay(self)
         if not m.get("script"):
             return "ERROR\n%s has no render information; run its script once with the current tweak.py" % self.stem
-        r = subprocess.run([m["python"], self.local(m["script"])] + m.get("args", []), cwd=self.local(m.get("cwd")) or self.dir,
-                           capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))   # no console flash under pythonw
+        # no window (Agg: a plt.show() left in the script must not block), UTF-8 log, a time limit
+        env = dict(os.environ, MPLBACKEND="Agg", PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+        try:
+            r = subprocess.run([m["python"], self.local(m["script"])] + m.get("args", []), cwd=self.local(m.get("cwd")) or self.dir,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=RENDER_TIMEOUT,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))   # no console flash under pythonw
+        except subprocess.TimeoutExpired:
+            return "ERROR\n%s: the script ran longer than %d s and was stopped" % (self.stem, RENDER_TIMEOUT)
+        except OSError as e:                               # the recorded python or folder is gone (venv moved, worktree removed)
+            return ("ERROR\n%s: could not start %s (%s). Run the figure's script once by hand with the right Python; "
+                    "that records the new command." % (self.stem, m.get("python"), e))
         out = (r.stdout + r.stderr).strip().splitlines()
         tw = [l for l in out[:-12] if l.startswith("tweaks: ")]   # what tweak.py reports is always kept
         return ("OK" if r.returncode == 0 else "ERROR %d" % r.returncode) + "\n" + "\n".join(tw + out[-12:])
@@ -239,9 +254,9 @@ def render_overlay(f):
     open(html, "w", encoding="utf-8").write(
         "<!doctype html><meta charset='utf-8'><style>@page{size:%.2fmm %.2fmm;margin:0}html,body{margin:0;"
         "background:#fff}img{display:block;width:%.2fmm;height:%.2fmm}</style><img src='%s'>"
-        % (w_mm, h_mm, w_mm, h_mm, os.path.basename(out_svg)))
+        % (w_mm, h_mm, w_mm, h_mm, quote(os.path.basename(out_svg))))
     css = lambda mm: max(1, round(mm * 96 / 25.4))
-    url = "file:///" + html.replace("\\", "/")
+    url = pathlib.Path(html).as_uri()
     try:
         for ext, flags in (("pdf", ["--print-to-pdf=%s" % f.path("_annotated.pdf"), "--no-pdf-header-footer"]),
                            ("png", ["--screenshot=%s" % f.path("_annotated.png"),
@@ -361,6 +376,8 @@ def consistency(root):
     out, missing = {r: [] for r, _ in ROLES}, []
     for fid, lab, kp in discover(root):
         k = json.load(open(kp, encoding="utf-8"))
+        if k.get("meta", {}).get("overlay"):         # an external figure: its own fonts, nothing to unify
+            continue
         tp = os.path.join(os.path.dirname(kp), stem_of(kp) + ".tweaks.json")
         tw = json.load(open(tp, encoding="utf-8")) if os.path.exists(tp) else {}
         recs = [v for v in k.get("ids", {}).values() if "member" not in v and v.get("role") in out]
@@ -394,6 +411,19 @@ def root_of(st, f):
     roots = st["root"] if isinstance(st["root"], (list, tuple)) else [st["root"]]
     hit = [r for r in roots if os.path.abspath(f.keys_path).startswith(os.path.abspath(r) + os.sep)]
     return max(hit, key=len) if hit else roots[0]
+
+
+class Server(ThreadingHTTPServer):
+    """On Windows SO_REUSEADDR lets a second copy bind the same port, and requests then go to either copy at random;
+    a port in use must fail instead."""
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
+def foreign(handler):
+    """A POST sent by a page from another site (the browser names it in Origin); the editor's own pages are local."""
+    o = handler.headers.get("Origin")
+    return bool(o) and o != "null" and not re.match(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$", o)
 
 
 def make_handler(st):
@@ -447,7 +477,13 @@ def make_handler(st):
 
         def do_POST(self):
             n = int(self.headers.get("Content-Length", 0))
+            if foreign(self):
+                return self.send("forbidden", "text/plain", 403)
             req = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            want = self.headers.get("X-Fig")
+            if want and self.path not in ("/open", "/overlay") and want != st["fig"].id:
+                return self.send(json.dumps({"log": "ERROR\n另一个窗口已打开 %s；刷新这个页面再保存" % st["fig"].id,
+                                             "moved": st["fig"].id}, ensure_ascii=False), code=409)
             with st["lock"]:
                 if self.path == "/overlay":            # register an external SVG/PNG and open it
                     try:
@@ -462,7 +498,7 @@ def make_handler(st):
                     st["fig"] = Fig(hit[0][0], hit[0][2])
                     return self.send(json.dumps({"ok": True}))
                 if self.path == "/open":
-                    hit = [x for x in discover(st["root"]) if x[0] == req["fig"]]
+                    hit = [x for x in discover(st["root"]) if x[0] == req.get("fig")]
                     if not hit:
                         return self.send(json.dumps({"log": "ERROR\nno such figure"}))
                     st["fig"] = Fig(hit[0][0], hit[0][2])
@@ -523,7 +559,7 @@ def make_handler(st):
                 if frag is not None or self.path == "/reset_all":
                     if f.meta().get("overlay"):             # the external figure's annotation layer, as drawn
                         open(f.path(".overlay.svgfrag"), "w", encoding="utf-8").write(frag or "")
-                if self.path == "/save":                  # full settings of the changed items; null removes one
+                if self.path in ("/save", "/stash"):      # full settings of the changed items; null removes one
                     for k, v in req.items():
                         if v:
                             t[k] = v
@@ -534,6 +570,8 @@ def make_handler(st):
                 elif self.path != "/render":
                     return self.send("not found", "text/plain", 404)
                 f.write_tweaks(t)
+                if self.path == "/stash":
+                    return self.send(json.dumps({"log": "OK"}))
                 log = f.render()
             self.send(json.dumps({"log": log}, ensure_ascii=False))
     return H
@@ -566,7 +604,10 @@ def main():
     stem = resolve(figs, a.figure)
     st = {"root": root, "figs": figs, "lock": threading.Lock(),
           "fig": Fig(stem, next(p for s, _, p in figs if s == stem))}
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(st))
+    try:
+        srv = Server(("127.0.0.1", a.port), make_handler(st))
+    except OSError:
+        sys.exit("port %d is in use (another figure editor is running?): close it or pass --port" % a.port)
     url = "http://127.0.0.1:%d/" % a.port
     print("figure editor at %s  (%d figures under %s)  -- Ctrl+C to stop" % (url, len(figs), "; ".join(root)))
     if not a.no_browser:

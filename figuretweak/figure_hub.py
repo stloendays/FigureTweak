@@ -22,7 +22,6 @@ import sys
 import threading
 import time
 import webbrowser
-from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlsplit
 from urllib.request import Request, urlopen
 
@@ -32,7 +31,7 @@ import chart_templates as ct  # noqa: E402
 import figure_tweak as ft  # noqa: E402
 import onboard  # noqa: E402
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 STATE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "figure_hub")
 # The paper registry: folders to scan and display names. The first that exists wins: the user's own file, a
 # figure-studio skill's projects/figure_papers.json next to this folder, then the default shipped with the program.
@@ -530,6 +529,8 @@ def make_handler(st):
 
         def do_POST(self):
             u = urlsplit(self.path)
+            if ft.foreign(self):                       # another website may not drive the hub (rename, add folders, quit)
+                return self.send("forbidden", "text/plain", 403)
             if not u.path.startswith("/hub/"):
                 if st["fig"] is None:
                     return self.send(json.dumps({"log": "ERROR\n还没有打开论文"}, ensure_ascii=False), code=409)
@@ -690,7 +691,7 @@ def main():
     path = "/"
     if a.paper:
         path = "/edit" if not open_path(st, a.paper, a.figure) else onboard_url() if os.path.isdir(a.paper) else "/"
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(st))
+    srv = ft.Server(("127.0.0.1", a.port), make_handler(st))   # a port in use fails here (ping above found no hub)
     st["server"] = srv
     threading.Thread(target=rescan, args=(st,), daemon=True).start()
     threading.Thread(target=watchdog, args=(st,), daemon=True).start()
